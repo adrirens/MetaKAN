@@ -1728,47 +1728,70 @@ class MultKAN(nn.Module):
             for i in range(self.width_out[l + 1]):
                 if i not in active_neurons_down[l]:
                     self.remove_node(l + 1, i, mode='down',log_history=False)
+        # active_neurons_up, active_neurons_down = self.get_active_neurons(threshold, mode, active_neurons_id)
+        # 创建新模型时需要保持的关键参数
+        model2 = MultKAN(
+            copy.deepcopy(self.width), 
+            grid=self.grid, 
+            k=self.k, 
+            base_fun=self.base_fun_name,
+            mult_arity=self.mult_arity,
+            ckpt_path=self.ckpt_path,
+            auto_save=True,
+            first_init=False,
+            state_id=self.state_id,
+            round=self.round,
+            hidden_dim=self.hidden_dim,
+            embedding_dim=self.embedding_dim
+        ).to(self.device)
 
-        model2 = MultKAN(copy.deepcopy(self.width), grid=self.grid, k=self.k, base_fun=self.base_fun_name, mult_arity=self.mult_arity, ckpt_path=self.ckpt_path, auto_save=True, first_init=False, state_id=self.state_id, round=self.round, hidden_dim=self.hidden_dim, embedding_dim= self.embedding_dim).to(self.device)
+        # 加载基础参数
         model2.load_state_dict(self.state_dict())
         
-        width_new = [self.width[0]]
-        
-        for i in range(len(self.acts_scale)):
+        # 调整embedding层参数
+        for l in range(self.depth):
+            # 获取当前层的活跃输入和输出索引
+            active_in = active_neurons_up[l]
+            active_out = active_neurons_down[l]
             
+            # 调整embedding矩阵维度
+            old_embedding = self.embeddings[l].data
+            new_embedding = old_embedding[active_in][:, active_out]  # [in_dim, out_dim, embedding_dim]
+            model2.embeddings[l] = nn.Parameter(new_embedding, requires_grad=True)
+            
+            # 调整HyperNetwork输出维度
+            model2.act_fun[l] = self.act_fun[l].get_subset(active_in, active_out)
+            model2.symbolic_fun[l] = self.symbolic_fun[l].get_subset(active_in, active_out)
+
+        # 更新模型结构参数
+        width_new = [self.width[0]]
+        for i in range(len(self.acts_scale)):
             if i < len(self.acts_scale) - 1:
-                num_sum = num_sums[i]
-                num_mult = num_mults[i]
+                # 更新每层宽度信息
+                num_sum = len(active_neurons_up[i+1][:self.width[i+1][0]])
+                num_mult = len(active_neurons_up[i+1][self.width[i+1][0]:])
+                model2.width[i+1] = [num_sum, num_mult]
+                
+                # 调整仿射变换参数
                 model2.node_bias[i].data = model2.node_bias[i].data[active_neurons_up[i+1]]
                 model2.node_scale[i].data = model2.node_scale[i].data[active_neurons_up[i+1]]
                 model2.subnode_bias[i].data = model2.subnode_bias[i].data[active_neurons_down[i]]
                 model2.subnode_scale[i].data = model2.subnode_scale[i].data[active_neurons_down[i]]
-                model2.width[i+1] = [num_sum, num_mult]
                 
+                # 更新输出维度
                 model2.act_fun[i].out_dim_sum = num_sum
                 model2.act_fun[i].out_dim_mult = num_mult
-                
                 model2.symbolic_fun[i].out_dim_sum = num_sum
                 model2.symbolic_fun[i].out_dim_mult = num_mult
-                
-                width_new.append([num_sum, num_mult])
 
-            model2.act_fun[i] = model2.act_fun[i].get_subset(active_neurons_up[i], active_neurons_down[i])
-            model2.symbolic_fun[i] = self.symbolic_fun[i].get_subset(active_neurons_up[i], active_neurons_down[i])
-            
+        # 更新全局结构参数
+        model2.width = [self.width[0]] + [[ns, nm] for ns, nm in zip(num_sums, num_mults)] + [self.width[-1]]
         model2.cache_data = self.cache_data
-        model2.acts = None
-        
-        width_new.append(self.width[-1])
-        model2.width = width_new
-        
-        if self.mult_homo == False:
-            model2.mult_arity = mult_arities
         
         if log_history:
-            self.log_history('prune_node')    
+            self.log_history('prune_node')
             model2.state_id += 1
-        
+            
         return model2
 
     def get_active_neurons(self, threshold=1e-2, mode="auto", active_neurons_id=None):
