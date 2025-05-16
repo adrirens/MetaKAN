@@ -4,8 +4,8 @@ import numpy as np
 import argparse
 from tqdm import tqdm
 import pandas as pd
-from models import kan
-from models import hyperkan
+from models.kan import KAN
+from models.metakan import MetaKAN
 import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser(description='PINN Training')
@@ -80,7 +80,7 @@ class MLP(nn.Module):
 class KAN(nn.Module):
     def __init__(self, layers:list, grid, k):
         super(KAN, self).__init__()
-        self.kan = kan.KAN(width = layers, grid = grid, k = k)
+        self.kan = KAN(width = layers, grid = grid, k = k)
 
     def forward(self, x):
         return ((1 - torch.sum(x**2, 1, keepdims=True)) * self.kan(x))
@@ -89,7 +89,7 @@ class KAN(nn.Module):
 class HyperKAN(nn.Module):
     def __init__(self, layers:list, grid, k, hidden_dim, embedding_dim, device):  
         super(HyperKAN, self).__init__()
-        self.hyperkan = hyperkan.MultKAN(width = layers, grid = grid, k = k, hidden_dim = hidden_dim, embedding_dim = embedding_dim, device = device)
+        self.hyperkan = MetaKAN(width = layers, grid = grid, k = k, hidden_dim = hidden_dim, embedding_dim = embedding_dim, device = device)
 
     def forward(self, x):
         return ((1 - torch.sum(x**2, 1, keepdims=True)) * self.hyperkan(x)) 

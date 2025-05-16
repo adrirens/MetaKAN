@@ -1887,7 +1887,6 @@ class MultKAN(nn.Module):
         
         self = self.prune_node(node_th, log_history=False)
         #self.prune_node(node_th, log_history=False)
-        print(self.width)
         self.forward(self.cache_data)
         self.attribute()
         self.prune_edge(edge_th, log_history=False)
