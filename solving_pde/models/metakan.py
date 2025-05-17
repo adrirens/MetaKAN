@@ -102,7 +102,7 @@ class MetaKAN(torch.nn.Module):
         for i, (in_features, out_features) in enumerate(zip(layers_hidden[:-1], layers_hidden[1:])):
             num_connections = in_features * out_features
             embedding = nn.Parameter(torch.randn(num_connections, embedding_dim))
-            init.xavier_normal_(embedding, mean=0.0, std=0.02)
+            init.xavier_normal_(embedding)
             self.embeddings.append(embedding)
 
             kan_layer = KANLinear(

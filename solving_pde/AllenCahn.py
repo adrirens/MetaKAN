@@ -4,8 +4,7 @@ import numpy as np
 import argparse
 from tqdm import tqdm
 import pandas as pd
-from models.kan import KAN
-from models.metakan import MetaKAN
+from models import kan, metakan
 
 parser = argparse.ArgumentParser(description='PINN Training')
 parser.add_argument('--SEED', type=int, default=0)
@@ -23,7 +22,7 @@ parser.add_argument('--N_test', type=int, default=int(20000)) # num of test poin
 parser.add_argument('--x_radius', type=float, default=1)
 parser.add_argument('--method', type=int, default=3)
 parser.add_argument('--batch_size', type=int, default=4)
-parser.add_argument('--model', type=str, default='HyperKAN')
+parser.add_argument('--model', type=str, default='MetaKAN')
 parser.add_argument('--grid', type=int, default=5)
 parser.add_argument('--k', type=int, default=3)
 parser.add_argument('--hidden_dim', type=int, default=64)
@@ -79,16 +78,16 @@ class MLP(nn.Module):
 class KAN(nn.Module):
     def __init__(self, layers:list, grid, k):
         super(KAN, self).__init__()
-        self.kan = KAN(width = layers, grid = grid, k = k)
+        self.kan = kan.KAN(layers_hidden = layers, grid_size = grid, spline_order = k)
 
     def forward(self, x):
         return ((1 - torch.sum(x**2, 1, keepdims=True)) * self.kan(x))
     
 
-class HyperKAN(nn.Module):
+class MetaKAN(nn.Module):
     def __init__(self, layers:list, grid, k, hidden_dim, embedding_dim, device):  
-        super(HyperKAN, self).__init__()
-        self.hyperkan = MetaKAN(width = layers, grid = grid, k = k, hidden_dim = hidden_dim, embedding_dim = embedding_dim, device = device)
+        super(MetaKAN, self).__init__()
+        self.hyperkan = metakan.MetaKAN(layers_hidden = layers, grid_size = grid, spline_order = k, hidden_dim = hidden_dim, embedding_dim = embedding_dim)
 
     def forward(self, x):
         return ((1 - torch.sum(x**2, 1, keepdims=True)) * self.hyperkan(x)) 
@@ -105,7 +104,12 @@ class PINN:
         # Initalize Neural Networks
         layers = [args.input_dim] + [args.PINN_h] * (args.PINN_L - 1) + [args.output_dim]
 
-        self.u_net = MLP(layers).to(device)
+        if args.model == 'MLP':
+            self.u_net = MLP(layers).to(device)
+        elif args.model == 'KAN':
+            self.u_net = KAN(layers, grid = args.grid, k=args.k).to(device)
+        elif args.model == 'MetaKAN':
+            self.u_net = MetaKAN(layers, grid = args.grid, k=args.k, hidden_dim = args.hidden_dim, embedding_dim = args.embedding_dim, device = device).to(device)
 
         self.net_params_pinn = list(self.u_net.parameters())
         self.saved_loss = []
