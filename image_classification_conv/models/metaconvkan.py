@@ -393,15 +393,15 @@ class SimpleMetaConvKAN(nn.Module):
         for i in range(len(layer_sizes) - 1):
             self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
         self.layers = nn.Sequential(
-            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=1,
                            padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
-            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=groups,
                               padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
                
-            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=groups,
                               padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
             
-            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=groups,
                               padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
             
 

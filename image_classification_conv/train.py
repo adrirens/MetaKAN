@@ -18,23 +18,18 @@ def train(args, model, device, train_loader, optimizer, epoch, logger, start_ind
 
     for batch_idx, (data, target) in enumerate(train_loader, start_index):
         data, target = todevice(data, device), todevice(target, device)
-        if args.optimizer in ["adam",'sgd','adamw']:
 
-            optimizer.zero_grad()
-            output = model(data)
+        optimizer.zero_grad()
+        output = model(data)
 
-            if args.loss == "cross_entropy":
-                losses = [F.cross_entropy(output, target)]
-            elif args.loss == "mse":
-                losses = [F.mse_loss(output, target)]
-            else:
-                raise NotImplementedError
-            
-            loss = 0
-            for l in losses:
-                loss = loss + l
-            loss.backward()
-            optimizer.step()
+
+        losses = [F.cross_entropy(output, target)]
+
+        loss = 0
+        for l in losses:
+            loss = loss + l
+        loss.backward()
+        optimizer.step()
 
 
 
@@ -53,57 +48,33 @@ def train(args, model, device, train_loader, optimizer, epoch, logger, start_ind
                     epoch, (batch_idx - start_index) * len(data), len(train_loader.dataset),
                     100. * (batch_idx - start_index) / len(train_loader)) + ",".join([str(l.item()) for l in losses])
                 logger.info(logger_info)
-                
-        if args.save_model_along and (batch_idx + 1) % args.save_model_interval == 0:
-            torch.save(model.state_dict(), f"{args.exp_id}/{args.operation}_{batch_idx + 1}.pt")
-            logger.info(f"model was saved to {args.exp_id}/{args.operation}_{batch_idx + 1}.pt")
-
-        if args.dry_run:
-            break
 
     return model
 
 def test(args, model, device, test_loader, logger, name):
     model.eval()
 
-    if args.loss == "cross_entropy":
-        
-        test_loss = 0
-        correct = 0
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = todevice(data, device), todevice(target, device)
-                output = model(data)
-                test_loss += F.cross_entropy(output, target, reduction='sum').item()  # sum up batch loss
-                pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-                correct += pred.eq(target.view_as(pred)).sum().item()
 
-        test_loss /= len(test_loader.dataset)
-
-        logger.info("\t"+name+' set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
-            test_loss, correct, len(test_loader.dataset),
-            100. * correct / len(test_loader.dataset)))
-
-        return 100. * correct / len(test_loader.dataset)
     
-    elif args.loss == "mse":
-        test_loss = 0
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = todevice(data, device), todevice(target, device)
-                output = model(data)
-                per_sample_loss = F.mse_loss(output, target, reduction='none')
-                per_sample_rmse = torch.sqrt(per_sample_loss)
-                test_loss += per_sample_rmse.sum().item()  # sum up batch loss
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = todevice(data, device), todevice(target, device)
+            output = model(data)
+            test_loss += F.cross_entropy(output, target, reduction='sum').item()  # sum up batch loss
+            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
 
-        test_loss /= len(test_loader.dataset)
+    test_loss /= len(test_loader.dataset)
 
-        logger.info("\t"+name+' set: Average loss: {:.6f}'.format(test_loss))
+    logger.info("\t"+name+' set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
+        test_loss, correct, len(test_loader.dataset),
+        100. * correct / len(test_loader.dataset)))
 
-        return test_loss
-    
-    else:
-        raise NotImplementedError
+    return 100. * correct / len(test_loader.dataset)
+
+
     
 def main():
     # Training settings
@@ -126,7 +97,6 @@ def main():
                         help='dataset')    
     
 
-
     parser.add_argument('--batch-size', type=int, default=1024,
                         help='input batch size for training (default: 1024)')
     parser.add_argument('--test-batch-size', type=int, default=128,
@@ -137,22 +107,14 @@ def main():
                         help='learning rate (default: 0.01)')
     parser.add_argument('--gamma', type=float, default=0.7,
                         help='Learning rate step gamma (default: 0.7, 1.0 for fewshot)')
-    parser.add_argument('--loss', type=str, default="cross_entropy",
-                        help='loss function')
 
 
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
-    parser.add_argument('--dry-run', action='store_true', default=False,
-                        help='quickly check a single pass')
     parser.add_argument('--seed', type=int, default=1314,
                         help='random seed (default: 1)')
     parser.add_argument('--log-interval', type=int, default=10,
                         help='how many batches to wait before logging training status')
-    parser.add_argument('--save-model', action='store_true', default=False,
-                        help='For Saving the current Model')
-    parser.add_argument('--save-model-interval', type = int, default=-1, 
-                        help='whether save model along training')
 
     parser.add_argument('--groups', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.25)
