@@ -9,34 +9,63 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 # from torch.optim.lr_scheduler import StepLR
 from fvcore.common.timer import Timer
+from torch.utils.tensorboard import SummaryWriter
 
-from utils import *
+
+from utils_conv import *
+from models.kan.LBFGS import *
 
 warnings.simplefilter(action='ignore', category=UserWarning)
 
-def train_double(args, model, device, train_loader, optimH, optimE, epoch, logger, start_index):
+def train_double(args, model, device, train_loader, optimH, optimE, epoch, writer, logger, start_index):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader, start_index):
         data, target = todevice(data, device), todevice(target, device)
-        optimH.zero_grad()
-        optimE.zero_grad()
-        output = model(data)
 
-        losses = [F.cross_entropy(output, target)]
-        loss = 0
-        for l in losses:
-            loss = loss + l
-        loss.backward()
-        optimE.step()
-        optimH.step()
+        if args.optimizer in ["adam",'sgd','adamw']:
+
+            optimH.zero_grad()
+            optimE.zero_grad()
+            output = model(data)
+
+            if args.loss == "cross_entropy":
+                losses = [F.cross_entropy(output, target)]
+            elif args.loss == "mse":
+                losses = [F.mse_loss(output, target)]
+            else:
+                raise NotImplementedError
+            
+            loss = 0
+            for l in losses:
+                loss = loss + l
+            loss.backward()
+            optimE.step()
+            optimH.step()
+
+
+
         if batch_idx % args.log_interval == 0:
+
             with torch.no_grad():
                 output = model(data)
-                losses = [F.cross_entropy(output, target)]
+                if args.loss == "cross_entropy":
+                    losses = [F.cross_entropy(output, target)]
+                elif args.loss == "mse":
+                    losses = [F.mse_loss(output, target)]
+                else:
+                    raise NotImplementedError
+
                 logger_info = 'Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: '.format(
                     epoch, (batch_idx - start_index) * len(data), len(train_loader.dataset),
                     100. * (batch_idx - start_index) / len(train_loader)) + ",".join([str(l.item()) for l in losses])
                 logger.info(logger_info)
+                
+        if args.save_model_along and (batch_idx + 1) % args.save_model_interval == 0:
+            torch.save(model.state_dict(), f"{args.exp_id}/{args.operation}_{batch_idx + 1}.pt")
+            logger.info(f"model was saved to {args.exp_id}/{args.operation}_{batch_idx + 1}.pt")
+
+        if args.dry_run:
+            break
 
     return model
 
@@ -45,52 +74,94 @@ def train_single(args, model, device, train_loader, optimizer, epoch, writer, lo
     for batch_idx, (data, target) in enumerate(train_loader, start_index):
         data, target = todevice(data, device), todevice(target, device)
 
+        if args.optimizer in ["adam",'sgd','adamw']:
 
-        optimizer.zero_grad()
-        output = model(data)
+            optimizer.zero_grad()
+            output = model(data)
 
-        losses = [F.cross_entropy(output, target)]
-
-        loss = 0
-        for l in losses:
-            loss = loss + l
-        loss.backward()
-        optimizer.step()
+            if args.loss == "cross_entropy":
+                losses = [F.cross_entropy(output, target)]
+            elif args.loss == "mse":
+                losses = [F.mse_loss(output, target)]
+            else:
+                raise NotImplementedError
+            
+            loss = 0
+            for l in losses:
+                loss = loss + l
+            loss.backward()
+            optimizer.step()
 
 
         if batch_idx % args.log_interval == 0:
 
             with torch.no_grad():
                 output = model(data)
-                losses = [F.cross_entropy(output, target)]
+                if args.loss == "cross_entropy":
+                    losses = [F.cross_entropy(output, target)]
+                elif args.loss == "mse":
+                    losses = [F.mse_loss(output, target)]
+                else:
+                    raise NotImplementedError
+
                 logger_info = 'Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: '.format(
                     epoch, (batch_idx - start_index) * len(data), len(train_loader.dataset),
                     100. * (batch_idx - start_index) / len(train_loader)) + ",".join([str(l.item()) for l in losses])
                 logger.info(logger_info)
+                
+        if args.save_model_along and (batch_idx + 1) % args.save_model_interval == 0:
+            torch.save(model.state_dict(), f"{args.exp_id}/{args.operation}_{batch_idx + 1}.pt")
+            logger.info(f"model was saved to {args.exp_id}/{args.operation}_{batch_idx + 1}.pt")
+
+        if args.dry_run:
+            break
 
     return model
 
-def test(model, device, test_loader,  logger, name):
+def test(args, model, device, test_loader, writer, logger, name, epoch):
     model.eval()
+
+    if args.loss == "cross_entropy":
         
-    test_loss = 0
-    correct = 0
-    with torch.no_grad():
-        for data, target in test_loader:
-            data, target = todevice(data, device), todevice(target, device)
-            output = model(data)
-            test_loss += F.cross_entropy(output, target, reduction='sum').item()  # sum up batch loss
-            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
-    
-    test_loss /= len(test_loader.dataset)   
+        test_loss = 0
+        correct = 0
+        with torch.no_grad():
+            for data, target in test_loader:
+                data, target = todevice(data, device), todevice(target, device)
+                output = model(data)
+                test_loss += F.cross_entropy(output, target, reduction='sum').item()  # sum up batch loss
+                pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+                correct += pred.eq(target.view_as(pred)).sum().item()
+        
+        test_loss /= len(test_loader.dataset)
+        if name == 'train':
+            writer.add_scalar('Average Loss/train', test_loss, epoch)    
+        if name == 'test':
+            writer.add_scalar('Average Loss/test', test_loss, epoch)              
+        logger.info("\t"+name+' set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
+            test_loss, correct, len(test_loader.dataset),
+            100. * correct / len(test_loader.dataset)))
 
-    logger.info("\t"+name+' set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
-
-    return 100. * correct / len(test_loader.dataset)
+        return 100. * correct / len(test_loader.dataset)
     
+    elif args.loss == "mse":
+        test_loss = 0
+        with torch.no_grad():
+            for data, target in test_loader:
+                data, target = todevice(data, device), todevice(target, device)
+                output = model(data)
+                per_sample_loss = F.mse_loss(output, target, reduction='none')
+                per_sample_rmse = torch.sqrt(per_sample_loss)
+                test_loss += per_sample_rmse.sum().item()  # sum up batch loss
+
+        test_loss /= len(test_loader.dataset)
+
+        logger.info("\t"+name+' set: Average loss: {:.6f}'.format(test_loss))
+
+        return test_loss
+    
+    else:
+        raise NotImplementedError
 
 def main():
     # Training settings
@@ -125,7 +196,7 @@ def main():
                         help='number of epochs to train (default: 14)')
     parser.add_argument('--lr', type=float, default=0.01,
                         help='learning rate (default: 0.01)')
-    parser.add_argument('--gamma', type=float, default=0.975,
+    parser.add_argument('--gamma', type=float, default=0.7,
                         help='Learning rate step gamma (default: 0.7, 1.0 for fewshot)')
     parser.add_argument('--loss', type=str, default="cross_entropy",
                         help='loss function')
@@ -134,11 +205,16 @@ def main():
 
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
+    parser.add_argument('--dry-run', action='store_true', default=False,
+                        help='quickly check a single pass')
     parser.add_argument('--seed', type=int, default=1314,
                         help='random seed (default: 1)')
     parser.add_argument('--log-interval', type=int, default=10,
                         help='how many batches to wait before logging training status')
-
+    parser.add_argument('--save-model', action='store_true', default=False,
+                        help='For Saving the current Model')
+    parser.add_argument('--save-model-interval', type = int, default=-1, 
+                        help='whether save model along training')
 
     parser.add_argument('--groups', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.25)
@@ -149,32 +225,35 @@ def main():
                         help='L1 regularization penalty')
     parser.add_argument('--affine', action='store_true', default=True, 
                         help='whether to use affine transformation in normalization layers')
-    parser.add_argument('--norm_layer', type=str, default='batch', 
+    parser.add_argument('--norm_layer', type=str, default='instance', 
                         help='type of normalization layer (batch, layer, instance)')
+    
+
 
 
     ################# Parameters for hypernetwork #################
-    parser.add_argument('--embedding_dim', type=int, default=1, 
+    parser.add_argument('--embedding_dim', type=int, default=3, 
                         help='dimension of embedding vector')  
     parser.add_argument('--hidden_dim',type=int, default= 32,
                         help='hidden dimension of hypernet')  
     parser.add_argument('--lr_h',type=float, default= 1e-3,
                         help='learning rate of hypernet')
     parser.add_argument('--lr_e',type=float, default= 1e-4,
-                        help='learing rate of embedding')        
+                        help='learing rate of embedding')    
+    parser.add_argument('--emb_sched', action='store_true', default=False)    
     ################# Parameters for hypernetwork #################
-    ################# Parameters for MetaKAN #################
+    ################# Parameters for HyperKAN #################
     parser.add_argument('--spline_order', type=int, default=3, 
                         help='order of the spline')
     
-    ################# Parameters for MetaKAN #################
-    ################# parameter for MetaFastKAN #################
-    parser.add_argument('--grid_size', type=int, default=5)
-    ################# parameter for MetaFastKAN #################    
-    ################# Parameters for MetaWavKAN #################
+    ################# Parameters for HyperKAN #################
+    ################# parameter for HyperFastKAN #################
+    parser.add_argument('--grid_size', type=int, default=8)
+    ################# parameter for HyperFastKAN #################    
+    ################# Parameters for HyperWavKAN #################
     parser.add_argument('--wavelet_type', type=str, default='mexican_hat', 
                         help='mother wavlet funtion')  
-    ################# Parameters for MetaWavKAN #################    
+    ################# Parameters for HyperWavKAN #################    
 
     args = parser.parse_args()
 
@@ -189,31 +268,32 @@ def main():
 
     randomness_control(args.seed)
 
+    args.save_model_along = args.save_model_interval > 0
 
-    if args.model in ['MetaKAN','MetaWavKAN','MetaFastKAN']:
+    if args.model in ['HyperKAN','HyperWavKAN','HyperFastKAN']:
         args.layer_sizes = [8 * 4, 16 * 4, 32 * 4, 64 * 4]
-    elif args.model in ['MetaKAN8', 'MetaWavKAN8', 'MetaFastKAN8']:
+    elif args.model in ['HyperKAN8', 'HyperWavKAN8', 'HyperFastKAN8']:
         args.layers_sizes = [8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4]
 
-    args.exp_id = f"./logs/{args.dataset}/{args.model}/"
+    args.exp_id = f"./logs/{args.dataset}/{args.model}_conv/"
 
     args.exp_id = args.exp_id + f"{args.embedding_dim}__{args.hidden_dim}__{args.batch_size}__{args.epochs}__{args.seed}__{args.groups}__{args.norm_layer}__{args.dropout}__{args.dropout_linear}__{args.degree_out}__{args.l1_penalty}__{args.affine}__{args.activation_name}__{args.gamma}__{args.optimizer}__{args.scheduler}"
     if args.optim_set == 'double':
-        args.exp_id = args.exp_id + f"__{args.optim_set}__{args.lr_h}__{args.lr_e}__{args.wd_e}"
+        args.exp_id = args.exp_id + f"{args.optim_set}__{args.lr_h}__{args.lr_e}__{args.wd_e}"
     elif args.optim_set == 'single':
-        args.exp_id = args.exp_id + f"__{args.optim_set}__{args.lr}"
+        args.exp_id = args.exp_id + f"{args.optim_set}__{args.lr}"
 
 
-    ################# id for MetaKAN #################
-    if args.model in ["MetaKAN","MetaKAN8"]:
+    ################# id for HyperKAN #################
+    if args.model in ["HyperKAN","HyperKAN8"]:
         args.exp_id = args.exp_id + f"/{args.spline_order}"
         os.makedirs(args.exp_id, exist_ok = True)
-    ################# id for MetaKAN #################
-    ################# id for MetaFastKAN #################
-    elif args.model in ["MetaFastKAN","MetaFastKAN"]:
+    ################# id for HyperKAN #################
+    ################# id for HyperFastKAN #################
+    elif args.model in ["HyperFastKAN","HyperFastKAN"]:
         args.exp_id = args.exp_id + f"/{args.grid_size}"
         os.makedirs(args.exp_id, exist_ok = True)
-    ################# id for MetaFastKAN #################
+    ################# id for HyperFastKAN #################
 
 
 
@@ -229,6 +309,7 @@ def main():
                     raise ValueError("training process was finished")
 
     logger, formatter = get_logger(args.exp_id, None, "log", level=logging.INFO)
+    writer = SummaryWriter(log_dir=args.exp_id)
     train_loader, test_loader, num_classes, input_channel = get_loader(args, use_cuda = use_cuda)
 
     args.num_classes = num_classes
@@ -239,29 +320,32 @@ def main():
     model = get_model(args)
 
     logger.info(model)
-    num_parameters = get_model_complexity(model, logger, args)
+    num_parameters, flops = get_model_complexity(model, logger, args)
     model = model.to(device)
-    if args.model =='MetaKAN':
-        metanet = model.metanet
+    if args.model =='HyperKAN':
+        hypernet = model.hyper_net
         embedding = model.embeddings
-    elif args.model == 'MetaWavKAN':
-        metanet = model.metanet
+    elif args.model == 'HyperWavKAN':
+        hypernet = model.hyper_net
         embedding = model.embeddings
-    elif args.model == 'MetaFastKAN':
-        metanet = model.metanet
+    elif args.model == 'HyperFastKAN':
+        hypernet = model.hyper_net
         embedding = model.embeddings
 
     if args.optim_set == 'double':
 
-        optimH = optim.AdamW(metanet.parameters(), lr=args.lr_h, weight_decay=1e-4)
+        optimH = optim.AdamW(hypernet.parameters(), lr=args.lr_h, weight_decay=1e-4)
         optimE = optim.AdamW(embedding.parameters(), lr=args.lr_e, weight_decay=5e-4)
         if args.scheduler == 'exponential':
             scheduler = optim.lr_scheduler.ExponentialLR(optimH, gamma=args.gamma)
-
+            scheduler_e =  optim.lr_scheduler.ExponentialLR(optimizer = optimE,
+                                                                gamma=args.gamma) 
         elif args.scheduler =='cos':
             scheduler =  torch.optim.lr_scheduler.CosineAnnealingLR(optimizer = optimH,
                                                                 T_max =  -1) #  * iters 
+            scheduler_e =  torch.optim.lr_scheduler.CosineAnnealingLR(optimizer = optimE,
 
+                                                                T_max =  -1) #  * iters 
     elif args.optim_set =='single':
         if args.optimizer == "adam":
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=5e-4)
@@ -279,10 +363,14 @@ def main():
             scheduler =  torch.optim.lr_scheduler.CosineAnnealingLR(optimizer = optimizer,
                                                                 T_max =  -1) #  * iters 
 
-
-    best_test_metric = 0 
-
+    if args.loss == "cross_entropy":
+        best_test_metric = 0 
+    elif args.loss == "mse":
+        best_test_metric = 1e10 
+    else:
+        raise NotImplementedError
     corresponding_train_metric = 0
+
     fvctimer = Timer()
     for epoch in range(1, args.epochs + 1):
         if fvctimer.is_paused():
@@ -290,20 +378,28 @@ def main():
         else:
             fvctimer.reset()
         if args.optim_set == 'double':
-            train_double(args, model, device, train_loader, optimH, optimE, epoch,  logger = logger, start_index = (epoch - 1) *len(train_loader))
+            train_double(args, model, device, train_loader, optimH, optimE, epoch, writer = writer, logger = logger, start_index = (epoch - 1) *len(train_loader))
         elif args.optim_set =='single':
-            train_single(args, model, device, train_loader, optimizer, epoch, logger = logger, start_index = (epoch - 1) *len(train_loader))
+            train_single(args, model, device, train_loader, optimizer, epoch, writer = writer, logger = logger, start_index = (epoch - 1) *len(train_loader))
         fvctimer.pause()
-        train_metric = test(model, device, train_loader, logger = logger, name = "train")
-        test_metric = test(model, device, test_loader,  logger = logger, name = "test")
+        train_metric = test(args, model, device, train_loader, writer = writer, logger = logger, name = "train", epoch= epoch)
+        test_metric = test(args, model, device, test_loader, writer = writer, logger = logger, name = "test", epoch= epoch)
         
-
-        if test_metric > best_test_metric:
-            best_test_metric = test_metric
-            corresponding_train_metric = train_metric
+        if args.loss == "cross_entropy":
+            if test_metric > best_test_metric:
+                best_test_metric = test_metric
+                corresponding_train_metric = train_metric
+        elif args.loss == "mse":
+            if test_metric < best_test_metric:
+                best_test_metric = test_metric
+                corresponding_train_metric = train_metric
+        else:
+            raise NotImplementedError
 
 
         scheduler.step()
+        if args.emb_sched:
+            scheduler_e.step()
 
     total_training_time = fvctimer.seconds()
     average_training_time_per_epoch = fvctimer.avg_seconds()
@@ -314,6 +410,7 @@ def main():
         train_metric = corresponding_train_metric,
         test_metric = best_test_metric,
         num_parameters = num_parameters,
+        flops = flops,
         total_training_time = total_training_time,
         average_training_time_per_epoch = average_training_time_per_epoch
     )
@@ -327,6 +424,7 @@ def main():
                     "train_metric" : corresponding_train_metric,
                     "test_metric" : best_test_metric,
                     "num_parameters" : num_parameters,
+                    "flops" : flops,
                     "total_training_time" : total_training_time,
                     "average_training_time_per_epoch" : average_training_time_per_epoch
                 }
