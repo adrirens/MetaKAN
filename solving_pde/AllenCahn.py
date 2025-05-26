@@ -13,6 +13,8 @@ parser.add_argument('--dataset', type=str, default="Allen_Cahn") # dataset name
 parser.add_argument('--device', type=str, default="cuda")
 parser.add_argument('--epochs', type=int, default=10000) # Adam epochs
 parser.add_argument('--lr', type=float, default=1e-3) # Adam lr
+parser.add_argument('--lr_h', type=float, default=1e-3)
+parser.add_argument('--lr_e', type=float, default=1e-2)
 parser.add_argument('--PINN_h', type=int, default=128) # width of PINN
 parser.add_argument('--PINN_L', type=int, default=4) # depth of PINN
 parser.add_argument('--save_loss', type=bool, default=True) # save the optimization trajectory?
@@ -88,6 +90,8 @@ class MetaKAN(nn.Module):
     def __init__(self, layers:list, grid, k, hidden_dim, embedding_dim, device):  
         super(MetaKAN, self).__init__()
         self.hyperkan = metakan.MetaKAN(layers_hidden = layers, grid_size = grid, spline_order = k, hidden_dim = hidden_dim, embedding_dim = embedding_dim)
+        self.embeddings = self.hyperkan.embeddings
+        self.metanet = self.hyperkan.hypernet
 
     def forward(self, x):
         return ((1 - torch.sum(x**2, 1, keepdims=True)) * self.hyperkan(x)) 
@@ -104,12 +108,41 @@ class PINN:
         # Initalize Neural Networks
         layers = [args.input_dim] + [args.PINN_h] * (args.PINN_L - 1) + [args.output_dim]
 
+        # 初始化优化器和调度器为 None
+        self.optimizer = None
+        self.scheduler = None
+        self.optimizer_emb = None
+        self.optimizer_hyper = None
+        self.scheduler_emb = None
+        self.scheduler_hyper = None
+
         if args.model == 'MLP':
             self.u_net = MLP(layers).to(device)
         elif args.model == 'KAN':
-            self.u_net = KAN(layers, grid = args.grid, k=args.k).to(device)
+            self.u_net = KAN(layers, grid=args.grid, k=args.k).to(device)
         elif args.model == 'MetaKAN':
-            self.u_net = MetaKAN(layers, grid = args.grid, k=args.k, hidden_dim = args.hidden_dim, embedding_dim = args.embedding_dim, device = device).to(device)
+            self.u_net = MetaKAN(layers, grid=args.grid, k=args.k, 
+                                 hidden_dim=args.hidden_dim, 
+                                 embedding_dim=args.embedding_dim, 
+                                 device=device).to(device)
+            
+            params_embeddings = list(self.u_net.embeddings.parameters())
+            params_hypernet = list(self.u_net.metanet.parameters())
+
+            self.optimizer_emb = torch.optim.Adam(params_embeddings, lr=self.adam_lr)
+            print(f"MetaKAN: Initialized optimizer for embeddings with {sum(p.numel() for p in params_embeddings)} parameters.")
+
+            self.optimizer_hyper = torch.optim.Adam(params_hypernet, lr=self.adam_lr)
+            print(f"MetaKAN: Initialized optimizer for hypernet with {sum(p.numel() for p in params_hypernet)} parameters.")
+
+
+        # self.net_params_pinn 用于计算总参数量和 MLP/KAN 的优化器
+        self.net_params_pinn = list(self.u_net.parameters())
+        
+        if args.model != 'MetaKAN':
+            if self.net_params_pinn: # 确保有参数
+                self.optimizer = torch.optim.Adam(self.net_params_pinn, lr=self.adam_lr)
+        
 
         self.net_params_pinn = list(self.u_net.parameters())
         self.saved_loss = []
@@ -198,10 +231,17 @@ class PINN:
         return num_pinn
 
     def train_adam(self):
-        optimizer = torch.optim.Adam(self.net_params_pinn, lr=self.adam_lr)
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9995)
-        lr_lambda = lambda epoch: 1-epoch/args.epochs
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        lr_lambda = lambda epoch: 1.0 - epoch / args.epochs # 使用 1.0 确保浮点除法
+
+        # 根据模型类型设置调度器
+        if args.model == 'MetaKAN':
+            if self.optimizer_emb and args.use_sch:
+                self.scheduler_emb = torch.optim.lr_scheduler.LambdaLR(self.optimizer_emb, lr_lambda=lr_lambda)
+            if self.optimizer_hyper and args.use_sch:
+                self.scheduler_hyper = torch.optim.lr_scheduler.LambdaLR(self.optimizer_hyper, lr_lambda=lr_lambda)
+        elif self.optimizer and args.use_sch: # 适用于 MLP, KAN
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_lambda)
+
         L2, L1 = self.L2_pinn()
         print('Initialization: l2: %e, l1: %e'%(L2, L1))
         self.saved_loss.append(0)
@@ -213,11 +253,33 @@ class PINN:
                 loss, saved_loss = self.Method0()
             elif args.method == 3:
                 loss, saved_loss = self.Method3()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            if args.use_sch:
-                scheduler.step()
+            # 根据模型类型执行优化步骤
+            if args.model == 'MetaKAN':
+                if self.optimizer_emb:
+                    self.optimizer_emb.zero_grad()
+                if self.optimizer_hyper:
+                    self.optimizer_hyper.zero_grad()
+
+                loss.backward() # 计算所有相关参数的梯度
+
+                if self.optimizer_emb:
+                    self.optimizer_emb.step()
+                if self.optimizer_hyper:
+                    self.optimizer_hyper.step()
+
+                if args.use_sch:
+                    if self.scheduler_emb:
+                        self.scheduler_emb.step()
+                    if self.scheduler_hyper:
+                        self.scheduler_hyper.step()
+            else: # 适用于 MLP, KAN
+                if self.optimizer: # 确保优化器存在
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+                    if args.use_sch and self.scheduler:
+                        self.scheduler.step()
+
             current_loss = saved_loss.item()
             if n % 100 == 0:
                 L2, L1 = self.L2_pinn()
