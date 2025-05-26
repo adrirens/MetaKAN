@@ -4,269 +4,6 @@ import torch.nn.functional as F
 from typing import List
 import abc
 
-
-
-
-# class MetaKANConvNDLayer(nn.Module):
-#     @staticmethod
-#     def _to_tuple(val, N, name):
-#         if isinstance(val, (list, tuple)):
-#             if len(val) == N:
-#                 return tuple(val)
-#             else:
-#                 raise ValueError(f"{name} must be a tuple of length {N}, but got {len(val)}")
-#         elif isinstance(val, int):
-#             return (val,) * N
-#         else:
-#             raise TypeError(f"{name} must be an int or a list/tuple of length {N}, but got {type(val)}")
-
-#     def __init__(self, conv_class, norm_class, input_dim, output_dim, spline_order, kernel_size,
-#                  groups=1, padding=0, stride=1, dilation=1,
-#                  ndim: int = 2, grid_size=5, base_activation=nn.GELU, grid_range=[-1, 1], dropout=0.0,
-#                  o_batch_size=32, **norm_kwargs):
-#         super(MetaKANConvNDLayer, self).__init__()
-#         self.inputdim = input_dim
-#         self.outdim = output_dim
-#         self.spline_order = spline_order
-        
-#         self.groups = groups
-#         self.ndim = ndim
-#         self.grid_size = grid_size
-#         self.base_activation = base_activation() if base_activation is not None else nn.Identity()
-#         self.grid_range = grid_range
-        
-#         # 确保卷积参数是元组形式
-#         self.kernel_size_tuple = self._to_tuple(kernel_size, ndim, "kernel_size")
-#         self.stride_tuple = self._to_tuple(stride, ndim, "stride")
-#         self.padding_tuple = self._to_tuple(padding, ndim, "padding")
-#         self.dilation_tuple = self._to_tuple(dilation, ndim, "dilation")
-
-#         self.grid_k = grid_size + spline_order # 样条基函数的数量 (不含base)
-#         self.params_per_input_channel = self.grid_k + 1 # 每个输入通道连接的总参数数量 (样条 + 基础)
-
-#         self.dropout = None
-#         if dropout > 0:
-#             if ndim == 1:
-#                 self.dropout = nn.Dropout1d(p=dropout)
-#             elif ndim == 2:
-#                 self.dropout = nn.Dropout2d(p=dropout)
-#             elif ndim == 3:
-#                 self.dropout = nn.Dropout3d(p=dropout)
-#             else: # 作为后备或针对其他情况
-#                 self.dropout = nn.Dropout(p=dropout)
-
-
-#         if groups <= 0:
-#             raise ValueError('groups must be a positive integer')
-#         if input_dim % groups != 0:
-#             raise ValueError('input_dim must be divisible by groups')
-#         if output_dim % groups != 0:
-#             raise ValueError('output_dim must be divisible by groups')
-
-#         self.input_dim_per_group = input_dim // groups
-#         self.output_dim_per_group = output_dim // groups
-
-
-#         self.o_batch_size = o_batch_size
-#         self.layer_norm = nn.ModuleList([norm_class(output_dim // groups, **norm_kwargs) for _ in range(groups)])
-
-#         self.prelus = nn.ModuleList([nn.PReLU() for _ in range(groups)])
-
-#         h = (self.grid_range[1] - self.grid_range[0]) / grid_size
-
-#         self.grid = torch.linspace(
-#             self.grid_range[0] - h * spline_order,
-#             self.grid_range[1] + h * spline_order,
-#             grid_size + 2 * spline_order + 1, # 总共 grid_size + 2*k + 1 个点
-#             dtype=torch.float32
-#         )
-
-
-#     def forward(self, x: torch.Tensor, layer_weight: torch.Tensor):
-
-
-#         split_x = torch.split(x, self.input_dim_per_group, dim=1)
-#         output_chunks = []
-
-#         for group_ind, x_group in enumerate(split_x):
-
-#             start_o_idx = group_ind * self.output_dim_per_group
-#             end_o_idx = (group_ind + 1) * self.output_dim_per_group
-            
-#             # weights_for_output_group 的形状: (O_group, I_total * params_per_input_channel, K_dims...)
-#             weights_for_output_group = layer_weight[start_o_idx:end_o_idx, :, ...]
-
-#             # 2. 从这些权重中，选择对应于当前输入组的部分
-#             #    每个输入通道贡献 params_per_input_channel 个参数
-#             start_i_param_idx = group_ind * self.input_dim_per_group * self.params_per_input_channel
-#             end_i_param_idx = (group_ind + 1) * self.input_dim_per_group * self.params_per_input_channel
-            
-#             # current_group_layer_weight 的形状: (O_group, I_group * params_per_input_channel, K_dims...)
-#             current_group_layer_weight = weights_for_output_group[:, start_i_param_idx:end_i_param_idx, ...]
-            
-#             y_group = self.forward_kan(x_group, group_ind, current_group_layer_weight)
-#             output_chunks.append(y_group)
-        
-#         y = torch.cat(output_chunks, dim=1)
-#         return y
-
-#     def calculate_spline_basis_maps(self, x_group: torch.Tensor) -> torch.Tensor:
-#         # x_group: (N, I_group, Input_Spatial_Dims...)
-#         # 输出: (N, I_group * self.grid_k, Input_Spatial_Dims...)
-
-#         N_batch = x_group.shape[0]
-#         I_group = self.input_dim_per_group # x_group.shape[1]
-#         input_spatial_dims = x_group.shape[2:]
-
-
-#         grid_view_dims = [1] * (self.ndim + 1) + [-1] # e.g., [1,1,1,-1] for ndim=2
-#         # target_expand_shape: (I_group, *input_spatial_dims, G_total_points)
-#         target_expand_shape = list(x_group.shape[1:])
-#         target_expand_shape.append(self.grid.shape[0])
-
-#         grid_ready_for_broadcast = self.grid.view(*grid_view_dims).expand(target_expand_shape).contiguous().to(x_group.device)
-#         grid_ready_for_broadcast = grid_ready_for_broadcast.unsqueeze(0) 
-
-
-#         x_uns = x_group.unsqueeze(-1) 
-
-#         bases = ((x_uns >= grid_ready_for_broadcast[..., :-1]) & (x_uns < grid_ready_for_broadcast[..., 1:])).to(x_group.dtype)
-
-#         epsilon = 1e-8 
-#         for k_order in range(1, self.spline_order + 1):
-#             # grid_... slicing needs to align with bases_... slicing
-
-#             g_left = grid_ready_for_broadcast[..., :-(k_order + 1)]
-#             g_right = grid_ready_for_broadcast[..., k_order:-1]
-            
-#             delta_prev = g_right - g_left
-#             delta_prev = torch.where(delta_prev == 0, torch.ones_like(delta_prev) * epsilon, delta_prev) 
-
-#             g_k_plus_1 = grid_ready_for_broadcast[..., k_order + 1:]
-#             g_1_minus_k = grid_ready_for_broadcast[..., 1:(-k_order)]
-#             delta_next = g_k_plus_1 - g_1_minus_k
-#             delta_next = torch.where(delta_next == 0, torch.ones_like(delta_next) * epsilon, delta_next) 
-#             term1_num = x_uns - g_left
-#             term1 = (term1_num / delta_prev) * bases[..., :-1]
-            
-#             term2_num = g_k_plus_1 - x_uns
-#             term2 = (term2_num / delta_next) * bases[..., 1:]
-#             bases = term1 + term2
-        
-#         bases = bases.contiguous() # Shape: (N, I_group, *input_spatial_dims, self.grid_k)
-        
-#         permute_dims = [0, 1, self.ndim + 2] + list(range(2, self.ndim + 2))
-#         bases_permuted = bases.permute(*permute_dims).contiguous()
-        
-#         final_shape_channels = I_group * self.grid_k
-#         bases_reshaped = bases_permuted.view(N_batch, final_shape_channels, *input_spatial_dims)
-        
-#         return bases_reshaped
-
-
-#     def forward_kan(self, x_group: torch.Tensor, group_index: int, current_group_layer_weight: torch.Tensor):
-#         # x_group shape: (N, I_group, Input_Spatial_Dims...)
-#         # current_group_layer_weight shape: (O_group, I_group * params_per_input_channel, Kernel_dims...)
-
-#         N_batch = x_group.shape[0]
-#         I_group = self.input_dim_per_group
-#         O_group = self.output_dim_per_group
-
-#         # 1. Select convolution function based on ndim
-#         if self.ndim == 1:
-#             conv_fn = F.conv1d
-#         elif self.ndim == 2:
-#             conv_fn = F.conv2d
-#         elif self.ndim == 3:
-#             conv_fn = F.conv3d
-#         else:
-#             raise ValueError(f"Unsupported ndim: {self.ndim}")
-
-#         reshaped_weights = current_group_layer_weight.view(
-#             O_group, 
-#             I_group, 
-#             self.params_per_input_channel, # grid_k + 1
-#             *self.kernel_size_tuple
-#         )
-
-#         # Base weights: params_per_input_channel index 0
-#         base_weight_params = reshaped_weights[:, :, 0, ...] 
-#         # Shape: (O_group, I_group, *kernel_size_tuple) - ready for conv_fn
-
-#         # Spline weights: params_per_input_channel index 1 onwards
-#         spline_weight_params = reshaped_weights[:, :, 1:, ...]
-#         # Shape: (O_group, I_group, grid_k, *kernel_size_tuple)
-#         # Reshape for conv_fn: (O_group, I_group * grid_k, *kernel_size_tuple)
-#         spline_weight_full_group = spline_weight_params.reshape(
-#             O_group,
-#             I_group * self.grid_k,
-#             *self.kernel_size_tuple
-#         )
-
-#         # 3. Precompute features for convolutions
-#         x_activated = self.base_activation(x_group) # For base convolution
-#         spline_basis_as_input_maps = self.calculate_spline_basis_maps(x_group) # For spline convolution
-#                                                                           # Shape: (N, I_group * grid_k, *Input_Spatial_Dims)
-
-#         # 4. Calculate output spatial shape (once)
-#         output_spatial_shape = []
-#         input_spatial_dims = x_group.shape[2:]
-#         for d in range(self.ndim):
-#             L_in = input_spatial_dims[d]
-#             P = self.padding_tuple[d]
-#             DIL = self.dilation_tuple[d] # Corrected from D
-#             K = self.kernel_size_tuple[d]
-#             S = self.stride_tuple[d]
-#             L_out = (L_in + 2 * P - DIL * (K - 1) - 1) // S + 1
-#             output_spatial_shape.append(L_out)
-#         output_spatial_shape = tuple(output_spatial_shape)
-
-#         # Initialize full output tensor for this group's computation
-#         group_conv_output_accumulator = torch.zeros(
-#             N_batch, O_group, *output_spatial_shape,
-#             device=x_group.device, dtype=x_group.dtype
-#         )
-
-#         # 5. Loop over output channels in batches
-#         for o_start in range(0, O_group, self.o_batch_size):
-#             o_end = min(o_start + self.o_batch_size, O_group)
-#             # current_o_actual_batch_size = o_end - o_start # Not strictly needed for slicing
-
-#             # Slice weights for the current batch of output channels
-#             # base_weight_params shape: (O_group, I_group, *kernel_size_tuple)
-#             base_weight_batch = base_weight_params[o_start:o_end, ...]
-#             # spline_weight_full_group shape: (O_group, I_group * grid_k, *kernel_size_tuple)
-#             spline_weight_batch = spline_weight_full_group[o_start:o_end, ...]
-            
-#             # Perform convolutions for this batch (groups=1 as input x_group/spline_basis is for this group only)
-#             current_base_conv_out = conv_fn(
-#                 x_activated, base_weight_batch,
-#                 stride=self.stride_tuple, padding=self.padding_tuple,
-#                 dilation=self.dilation_tuple, groups=1 
-#             )
-#             current_spline_conv_out = conv_fn(
-#                 spline_basis_as_input_maps, spline_weight_batch,
-#                 stride=self.stride_tuple, padding=self.padding_tuple,
-#                 dilation=self.dilation_tuple, groups=1
-#             )
-            
-#             # Accumulate results
-#             group_conv_output_accumulator[:, o_start:o_end, ...] = current_base_conv_out + current_spline_conv_out
-        
-
-#         normalized_output = self.layer_norm[group_index](group_conv_output_accumulator)
-#         activated_output = self.prelus[group_index](normalized_output)
-
-
-#         if self.dropout is not None:
-#             final_group_output = self.dropout(activated_output)
-#         else:
-#             final_group_output = activated_output
-
-#         return final_group_output
-
-
-
 class MetaKANConvNDLayer(nn.Module):
     def __init__(self, conv_class, norm_class, input_dim, output_dim, spline_order, kernel_size,
                  groups=1, padding=0, stride=1, dilation=1,
@@ -319,7 +56,7 @@ class MetaKANConvNDLayer(nn.Module):
     def forward_kan(self, x, group_index, layer_weight):
 
         # Apply base activation to input and then linear transform with base weights
-        base_weight = layer_weight[:, :self.inputdim // self.groups, :, :].view(self.outdim // self.groups, self.inputdim // self.groups, self.kernel_size, self.kernel_size)
+        base_weight = layer_weight[:, -self.inputdim // self.groups:, :, :].reshape(self.outdim // self.groups, self.inputdim // self.groups, self.kernel_size, self.kernel_size)
         base_output = F.conv2d(self.base_activation(x), base_weight, stride=self.stride, padding=self.padding, dilation=self.dilation, groups=1)
 
         x_uns = x.unsqueeze(-1)  # Expand dimensions for spline operations.
@@ -340,7 +77,7 @@ class MetaKANConvNDLayer(nn.Module):
                     ((grid[..., k + 1:] - x_uns) / (grid[..., k + 1:] - grid[..., 1:(-k)]) * bases[..., 1:])
         bases = bases.contiguous()
         bases = bases.moveaxis(-1, 2).flatten(1, 2)
-        spline_weight = layer_weight[:, self.inputdim // self.groups:, :, :].reshape(self.outdim // self.groups, self.inputdim // self.groups * self.grid_k, self.kernel_size, self.kernel_size) 
+        spline_weight = layer_weight[:, :-self.inputdim // self.groups, :, :].reshape(self.outdim // self.groups, self.inputdim // self.groups * self.grid_k, self.kernel_size, self.kernel_size) 
         spline_output = F.conv2d(bases, spline_weight, stride=self.stride, padding=self.padding, dilation=self.dilation, groups=1)
 
         x = self.prelus[group_index](self.layer_norm[group_index](base_output + spline_output))
@@ -610,61 +347,61 @@ def linear_layer(input_dim, output_dim):
     nn.init.constant_(linear.bias, 0)
     return linear
 
-class MetaLearner(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super(MetaLearner, self).__init__()
+class HyperNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim,dropout_hyper=0.0):
+        super(HyperNetwork, self).__init__()
         self.layers = nn.Sequential(
             linear_layer(input_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(p=dropout_hyper),
             linear_layer(hidden_dim, output_dim)
+            # linear_layer(hidden_dim, hidden_dim//2),
+            # nn.ReLU(),
+            # linear_layer(hidden_dim//2, hidden_dim//4),
+            # nn.ReLU(),
+            # linear_layer(hidden_dim//4, output_dim)
         )
     def forward(self, x):
         return self.layers(x)
 
 class SimpleMetaConvKAN(nn.Module):
-    def __init__(self, args):
-        super(SimpleMetaConvKAN, self).__init__()        
-        layer_sizes = args.layer_sizes
-        num_classes = args.num_classes
-        input_channels = args.input_channel
-        spline_order = args.spline_order
-        degree_out = args.degree_out
-        groups = args.groups
-        dropout = args.dropout
-        dropout_linear = args.dropout_linear
-        affine = args.affine
-        embedding_dim = args.embedding_dim
-        hidden_dim = args.hidden_dim
-        grid_size = args.grid_size
-
-        if args.norm_layer == 'batch':
-            norm_layer = nn.BatchNorm2d
-        elif args.norm_layer == 'instance':
-            norm_layer = nn.InstanceNorm2d
-        elif args.norm_layer == 'layer':
-            norm_layer = nn.LayerNorm
-        else:
-            NotImplementedError('Norm layer not implemented')        
-
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 2,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,            
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(SimpleMetaConvKAN, self).__init__()
         self.layer_sizes = [input_channels]+layer_sizes
         self.grid_k = grid_size + spline_order
 
-        self.metanet = MetaLearner(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim)
+        self.hyper_net = HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim)
 
         # 初始化每一层的嵌入向量列表 nn.ParameterList
         self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
         for i in range(len(layer_sizes) - 1):
             self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
         self.layers = nn.Sequential(
-            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=1,
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
                            padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
-            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=groups,
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
                               padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
                
-            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=groups,
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
                               padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
             
-            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, grid_size = grid_size,spline_order=spline_order, groups=groups,
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
                               padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
             
 
@@ -676,17 +413,19 @@ class SimpleMetaConvKAN(nn.Module):
 
             self.output = KAN([layer_sizes[3], num_classes], dropout=dropout_linear,
                               first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
 
     def _initialize_embeddings(self):
         """ 对嵌入向量进行 Xavier 初始化 """
         for embedding in self.embeddings:
-            nn.init.kaiming_normal_(embedding)
+            nn.init.xavier_uniform_(embedding)
 
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
             embedding = self.embeddings[i]
-            layer_weight = self.metanet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            layer_weight = self.hyper_net(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
             x = layer(x, layer_weight)
         x = self.avg_pool(x)
         x = torch.flatten(x, 1)
@@ -694,36 +433,29 @@ class SimpleMetaConvKAN(nn.Module):
         return x
 
 class EightSimpleMetaConvKAN(nn.Module):
-    def __init__(self, args):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
         super(EightSimpleMetaConvKAN, self).__init__()
-        
-        layer_sizes = args.layer_sizes
-        num_classes = args.num_classes
-        input_channels = args.input_channels
-        spline_order = args.spline_order
-        degree_out = args.degree_out
-        groups = args.groups
-        grid_size = args.grid_size
-        dropout = args.dropout
-        dropout_linear = args.dropout_linear
-        l1_penalty = args.l1_penalty
-        affine = args.affine
-        embedding_dim = args.embedding_dim
-        hidden_dim = args.hidden_dim
-
-        
-        if args.norm_layer == 'batch':
-            norm_layer = nn.BatchNorm2d
-        elif args.norm_layer == 'instance':
-            norm_layer = nn.InstanceNorm2d
-        elif args.norm_layer == 'layer':
-            norm_layer = nn.LayerNorm
-        else:
-            raise NotImplementedError('Norm layer not implemented')
         self.layer_sizes = [input_channels]+layer_sizes
         self.grid_k = grid_size + spline_order
 
-        self.metanet = MetaLearner(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim)
+        self.hyper_net = HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper=dropout_hyper)
 
         # 初始化每一层的嵌入向量列表 nn.ParameterList
         self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
@@ -761,6 +493,8 @@ class EightSimpleMetaConvKAN(nn.Module):
         else:
             self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
                               first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
 
     def _initialize_embeddings(self):
         """ 对嵌入向量进行 Xavier 初始化 """
@@ -771,9 +505,827 @@ class EightSimpleMetaConvKAN(nn.Module):
     def forward(self, x):
         for i, layer in enumerate(self.layers):
             embedding = self.embeddings[i]
-            layer_weight = self.metanet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            layer_weight = self.hyper_net(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
             x = layer(x, layer_weight)
         x = self.avg_pool(x)
         x = torch.flatten(x, 1)
         x = self.output(x)
         return x
+    
+
+class EightSimpleMetaConvKAN_L(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(EightSimpleMetaConvKAN_L, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper=dropout_hyper)
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            layer_weight = self.hyper_net(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x
+
+class EightSimpleMetaConvKAN_DE(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(EightSimpleMetaConvKAN_DE, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim*2, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(len(layer_sizes))])
+        
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+
+        self.layer_embeddings = nn.ModuleList([nn.Embedding(1, embedding_dim) for i in range(len(layer_sizes))])
+
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+        for embedding in self.layer_embeddings:
+            nn.init.xavier_uniform_(embedding.weight)
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            layer_embedding = self.layer_embeddings[i](torch.tensor([0]).to(x.device)).expand_as(embedding)
+            embedding = torch.cat((embedding, layer_embedding), dim=-1)
+            layer_weight = self.hyper_net[i](embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x
+    
+
+class EightSimpleMetaConvKAN_DEL(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d,
+            layer_emb_dim: int = 1
+    ):
+        super(EightSimpleMetaConvKAN_DEL, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        # self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim*2, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(len(layer_sizes))])
+        self.hyper_net = HyperNetwork(input_dim=embedding_dim+layer_emb_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper)
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+
+        self.layer_embeddings = nn.ModuleList([nn.Embedding(1, layer_emb_dim) for i in range(len(layer_sizes))])
+
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+        for embedding in self.layer_embeddings:
+            nn.init.xavier_uniform_(embedding.weight)
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            layer_embedding = self.layer_embeddings[i](torch.tensor([0]).to(x.device)).expand(embedding.size(0), -1)
+            embedding = torch.cat((embedding, layer_embedding), dim=-1)
+            layer_weight = self.hyper_net(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x    
+    
+
+class EightSimpleMetaConvKAN_L3_DE(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d,
+            layer_emb_dim: int = 1
+    ):
+        super(EightSimpleMetaConvKAN_L3_DE, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim*2, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(3)])
+        # self.hyper_net = HyperNetwork(input_dim=embedding_dim*(layer_emb_dim+1), output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper)
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+
+        self.layer_embeddings = nn.ModuleList([nn.Embedding(1, embedding_dim*layer_emb_dim) for i in range(len(layer_sizes))])
+
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+        for embedding in self.layer_embeddings:
+            nn.init.xavier_uniform_(embedding.weight)
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            if i <4:
+                hypernet = self.hyper_net[0]
+            elif i<6:
+                hypernet = self.hyper_net[1]
+            else:
+                hypernet = self.hyper_net[2]
+            embedding = self.embeddings[i]
+            layer_embedding = self.layer_embeddings[i](torch.tensor([0]).to(x.device)).expand(embedding.size(0), -1)
+            embedding = torch.cat((embedding, layer_embedding), dim=-1)
+
+            layer_weight = hypernet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x        
+
+class EightSimpleMetaConvKAN_LC(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(EightSimpleMetaConvKAN_LC, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(4)])
+        
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            if i <2 :
+                hypernet = self.hyper_net[0]
+            elif i < 4:
+                hypernet = self.hyper_net[1]
+            elif i < 6:
+                hypernet = self.hyper_net[2]
+            else:
+                hypernet = self.hyper_net[3]
+
+            
+            layer_weight = hypernet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x    
+    
+class EightSimpleMetaConvKAN_L3(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(EightSimpleMetaConvKAN_L3, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(3)])
+        
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            if i <4 :
+                hypernet = self.hyper_net[0]
+            elif i < 6:
+                hypernet = self.hyper_net[1]
+            elif i < 8:
+                hypernet = self.hyper_net[2]
+
+            
+            layer_weight = hypernet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x        
+
+
+class EightSimpleMetaConvKAN_L4(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(EightSimpleMetaConvKAN_L4, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(4)])
+        
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_normal_(embedding)
+
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            if i <2 :
+                hypernet = self.hyper_net[0]
+            elif i < 4:
+                hypernet = self.hyper_net[1]
+            elif i < 6:
+                hypernet = self.hyper_net[2]
+            else:
+                hypernet = self.hyper_net[3]
+
+            
+            layer_weight = hypernet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x                
+    
+
+class EightSimpleMetaConvKAN_L5(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(EightSimpleMetaConvKAN_L5, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(5)])
+        
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            if i <2 :
+                hypernet = self.hyper_net[0]
+            elif i < 4:
+                hypernet = self.hyper_net[1]
+            elif i < 5:
+                hypernet = self.hyper_net[2]
+            elif i<6:
+                hypernet = self.hyper_net[3]
+            else:
+                hypernet = self.hyper_net[4]
+
+            
+            layer_weight = hypernet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x        
+    
+
+class EightSimpleMetaConvKAN_L6(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            input_channels: int = 1,
+            grid_size: int = 5,
+            spline_order: int = 3,
+            degree_out: int = 3,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0,           
+            norm_layer: nn.Module = nn.BatchNorm2d
+    ):
+        super(EightSimpleMetaConvKAN_L6, self).__init__()
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size + spline_order
+
+        self.hyper_net = nn.ModuleList([HyperNetwork(input_dim=embedding_dim, output_dim=self.grid_k+1, hidden_dim=hidden_dim, dropout_hyper = dropout_hyper) for _ in range(6)])
+        
+
+
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+        self.layers = nn.Sequential(
+            MetaKANConv2DLayer(input_channels, layer_sizes[0], kernel_size=3, spline_order=spline_order, groups=1,
+                           padding=1, stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            MetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+            
+            MetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=2, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+            MetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], kernel_size=3, spline_order=spline_order, groups=groups,
+                              padding=1, stride=1, dilation=1, dropout=dropout, affine=affine, norm_layer=norm_layer),
+               
+
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = KAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                              first_dropout=True, spline_order=spline_order)
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            embedding = self.embeddings[i]
+            if i <2 :
+                hypernet = self.hyper_net[0]
+            elif i < 4:
+                hypernet = self.hyper_net[1]
+            else:
+                hypernet = self.hyper_net[i-3]
+
+            
+            layer_weight = hypernet(embedding).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, layer_weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x                
+        
