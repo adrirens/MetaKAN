@@ -37,9 +37,9 @@ def linear_layer(input_dim, output_dim):
     nn.init.constant_(linear.bias, 0)
     return linear
 
-class HyperNetwork(nn.Module):
+class MetaLearner(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
-        super(HyperNetwork, self).__init__()
+        super(MetaLearner, self).__init__()
         self.layers = nn.Sequential(
             linear_layer(input_dim, hidden_dim),
             nn.ReLU(),
@@ -195,7 +195,7 @@ class MultKAN(nn.Module):
         self.hidden_dim = hidden_dim
         
 
-        ### initializing the hypernet
+        ### initializing the metanet
         self.embedding_dim = input_dim = embedding_dim
         output_dim = grid + k + 1
                 
@@ -204,7 +204,7 @@ class MultKAN(nn.Module):
                 width[i] = [width[i],0]
             
         self.width = width
-        self.hypernet = HyperNetwork(input_dim, hidden_dim, output_dim).to(device)
+        self.metanet = MetaLearner(input_dim, hidden_dim, output_dim).to(device)
 
         if isinstance(mult_arity, int):
             self.mult_homo = True # when homo is True, parallelization is possible
@@ -334,7 +334,7 @@ class MultKAN(nn.Module):
         for symbolic_kanlayer in self.symbolic_fun:
             symbolic_kanlayer.to(device)
             
-        self.hypernet=self.hypernet.to(device)
+        self.metanet=self.metanet.to(device)
         for embedding in self.embeddings:
             embedding.to(device)            
         return self
@@ -820,7 +820,7 @@ class MultKAN(nn.Module):
 
         for l in range(self.depth):
             
-            weights = self.hypernet(self.embeddings[l].view(-1,self.embedding_dim)).view(self.width_in[l], self.width_out[l+1], self.base_num)
+            weights = self.metanet(self.embeddings[l].view(-1,self.embedding_dim)).view(self.width_in[l], self.width_out[l+1], self.base_num)
 
             x_numerical, preacts, postacts_numerical, postspline = self.act_fun[l](x, weights)
             
@@ -1759,7 +1759,7 @@ class MultKAN(nn.Module):
             new_embedding = old_embedding[active_in][:, active_out]  # [in_dim, out_dim, embedding_dim]
             model2.embeddings[l] = nn.Parameter(new_embedding, requires_grad=True)
             
-            # 调整HyperNetwork输出维度
+            # 调整MetaLearner输出维度
             model2.act_fun[l] = self.act_fun[l].get_subset(active_in, active_out)
             model2.symbolic_fun[l] = self.symbolic_fun[l].get_subset(active_in, active_out)
 
