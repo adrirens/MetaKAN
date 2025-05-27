@@ -5,6 +5,7 @@ from kan_convs import KANConv2DLayer
 
 from utils import L1
 import torch.nn.functional as F
+from typing import List, Optional
 
 class KAN(nn.Module):  # Kolmogorov Arnold Legendre Network (KAL-Net)
     def __init__(self, layers_hidden, dropout: float = 0.0, grid_size=5, spline_order=3, base_activation=nn.GELU,

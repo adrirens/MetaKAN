@@ -233,9 +233,9 @@ def get_loaders(args):
             v2.ToTensor(),
             v2.Normalize((0.5,), (0.5,))
         ])
-        trainset = torchvision.datasets.MNIST(root="../dataset", train=True, download=True, transform=transform_train)
+        trainset = torchvision.datasets.MNIST(root="./data", train=True, download=True, transform=transform_train)
         # Load and transform the MNIST validation dataset
-        valset = torchvision.datasets.MNIST(root="../dataset", train=False, download=True, transform=transform_test)
+        valset = torchvision.datasets.MNIST(root="./data", train=False, download=True, transform=transform_test)
         # Create DataLoaders for training and validation datasets    
         input_channels = 1
         num_classes = 10    
@@ -309,26 +309,8 @@ def get_model(args, input_channels, num_classes):
     else:
         norm_layer = None
 
-    if args.model == 'KAN':
-        kan_model = SimpleConvKAN([8 * 4, 16 * 4, 32 * 4, 64 * 4], num_classes=num_classes, input_channels=input_channels,
-                         spline_order=3, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                         degree_out=1)
 
-    elif args.model == 'KAN8':
-        kan_model = EightSimpleConvKAN([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                              num_classes=num_classes, input_channels=input_channels,
-                              spline_order=3, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.000000,
-                              degree_out=1)       
-    elif args.model == 'FastKAN':
-        kan_model = SimpleFastConvKAN([8 * 4, 16 * 4, 32 * 4, 64 * 4], num_classes=num_classes, input_channels=input_channels,
-                             grid_size=8, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                             degree_out=1) 
-    elif args.model == 'FastKAN8':
-        kan_model = EightSimpleFastConvKAN([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                                  num_classes=num_classes, input_channels=input_channels,
-                                  grid_size=8, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                                  degree_out=1)
-    elif args.model == 'MetaKAN':
+    if args.model == 'MetaKAN':
         kan_model = SimpleMetaConvKAN([8 * 4, 16 * 4, 32 * 4, 64 * 4], num_classes=num_classes, input_channels=input_channels,
                              grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                              degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, norm_layer= nn.BatchNorm2d)
@@ -503,7 +485,6 @@ def get_model(args, input_channels, num_classes):
                         degree=3, groups=args.groups, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                         degree_out=1,embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper=args.dropout_hyper, norm_layer= nn.InstanceNorm2d)                
     return kan_model
-
 
 def main():
     # Training settings

@@ -17,7 +17,7 @@ from models.fast_conv_kan_baseline import SimpleFastConvKAN, EightSimpleFastConv
 from models.metaconvkan import SimpleMetaConvKAN, EightSimpleMetaConvKAN
 from models.metafastconvkan import SimpleMetaFastConvKAN, EightFastMetaConvKAN
 
-
+import abc
 
 def get_timestamp():
     now = datetime.now()

@@ -4,12 +4,13 @@ import torch.nn.functional as F
 from typing import List
 import abc
 
-class MetaKANConvNDLayer(nn.Module):
+
+class MetaKANConvNDLayer_origin(nn.Module):
     def __init__(self, conv_class, norm_class, input_dim, output_dim, spline_order, kernel_size,
                  groups=1, padding=0, stride=1, dilation=1,
                  ndim: int = 2, grid_size=5, base_activation=nn.GELU, grid_range=[-1, 1], dropout=0.0,
                  **norm_kwargs):
-        super(MetaKANConvNDLayer, self).__init__()
+        super(MetaKANConvNDLayer_origin, self).__init__()
         self.inputdim = input_dim
         self.outdim = output_dim
         self.spline_order = spline_order
@@ -96,6 +97,222 @@ class MetaKANConvNDLayer(nn.Module):
         y = torch.cat(output, dim=1)
         return y
 
+
+class MetaKANConvNDLayer(nn.Module):
+    def __init__(self, conv_class, norm_class, input_dim, output_dim, spline_order, kernel_size,
+                 groups=1, padding=0, stride=1, dilation=1,
+                 ndim: int = 2, grid_size=5, base_activation=nn.GELU, grid_range=[-1, 1], dropout=0.0,
+                 o_batch_size=None, 
+                 **norm_kwargs):
+        super(MetaKANConvNDLayer, self).__init__()
+        self.inputdim = input_dim
+        self.outdim = output_dim
+        self.spline_order = spline_order
+        self.kernel_size = kernel_size # 保持原始类型 (int 或 tuple)
+        self.padding = padding
+        self.stride = stride
+        self.dilation = dilation
+        self.groups = groups
+        self.ndim = ndim
+        self.grid_size = grid_size
+        self.base_activation = base_activation() if base_activation is not None else nn.Identity()
+        self.grid_range = grid_range
+        self.norm_kwargs = norm_kwargs # 原始保留
+        self.grid_k = grid_size + spline_order
+        
+        self.dropout = None
+        if dropout > 0:
+            if ndim == 1:
+                self.dropout = nn.Dropout1d(p=dropout)
+            elif ndim == 2:
+                self.dropout = nn.Dropout2d(p=dropout)
+            elif ndim == 3:
+                self.dropout = nn.Dropout3d(p=dropout)
+        
+        if groups <= 0:
+            raise ValueError('groups must be a positive integer')
+        if input_dim % groups != 0:
+            raise ValueError('input_dim must be divisible by groups')
+        if output_dim % groups != 0:
+            raise ValueError('output_dim must be divisible by groups')
+
+        o_g = output_dim // groups
+
+
+        if o_batch_size is None or o_batch_size <= 0:
+            self.o_batch_size = o_g 
+        else:
+            self.o_batch_size = o_batch_size
+
+        self.layer_norm = nn.ModuleList([norm_class(o_g, **norm_kwargs) for _ in range(groups)])
+        self.prelus = nn.ModuleList([nn.PReLU() for _ in range(groups)])
+
+        h = (self.grid_range[1] - self.grid_range[0]) / grid_size
+        self.grid = torch.linspace(
+            self.grid_range[0] - h * spline_order,
+            self.grid_range[1] + h * spline_order,
+            grid_size + 2 * spline_order + 1,
+            dtype=torch.float32
+        )
+
+    def forward_kan(self, x, group_index, layer_weight):
+        o_g = self.outdim // self.groups
+        i_g = self.inputdim // self.groups
+        batch_size = x.shape[0]
+
+        ks_tuple = []
+        if isinstance(self.kernel_size, int):
+            ks_tuple = (self.kernel_size,) * self.ndim
+        elif isinstance(self.kernel_size, (list, tuple)) and len(self.kernel_size) == self.ndim:
+            ks_tuple = tuple(self.kernel_size)
+        else:
+
+            if self.ndim == 2 and isinstance(self.kernel_size, int):
+                 ks_tuple = (self.kernel_size, self.kernel_size)
+            elif isinstance(self.kernel_size, tuple) and len(self.kernel_size) == self.ndim :
+                 ks_tuple = self.kernel_size
+            else:
+                 raise ValueError(f"kernel_size {self.kernel_size} incompatible with ndim {self.ndim}")
+
+
+
+        base_w_full = layer_weight[:, -i_g:, ...].reshape(o_g, i_g, *ks_tuple)
+        spline_w_full = layer_weight[:, :-i_g, ...].reshape(o_g, i_g * self.grid_k, *ks_tuple)
+
+
+        x_act = self.base_activation(x)
+
+
+        x_uns = x.unsqueeze(-1)
+
+        target_list = list(x.shape[1:])
+        target_list.append(self.grid.shape[0])
+        target = tuple(target_list)
+        
+
+        grid = self.grid.view(*list([1 for _ in range(self.ndim + 1)] + [-1, ])).expand(target).contiguous().to(x.device)
+
+        bases = ((x_uns >= grid[..., :-1]) & (x_uns < grid[..., 1:])).to(x.dtype)
+        for k_loop in range(1, self.spline_order + 1): 
+            left_intervals = grid[..., :-(k_loop + 1)]
+            right_intervals = grid[..., k_loop:-1]
+            delta = right_intervals - left_intervals
+            delta = torch.where(delta == 0, torch.ones_like(delta) * 1e-8, delta)
+            
+            g_k_plus_1 = grid[..., k_loop + 1:]
+            g_1_minus_k = grid[..., 1:(-k_loop)]
+            delta_next = g_k_plus_1 - g_1_minus_k
+            delta_next = torch.where(delta_next == 0, torch.ones_like(delta_next) * 1e-8, delta_next)
+
+            bases = ((x_uns - left_intervals) / delta * bases[..., :-1]) + \
+                    ((g_k_plus_1 - x_uns) / delta_next * bases[..., 1:])
+        bases = bases.contiguous()
+
+        if self.ndim == 1: perm_dims = (0, 1, 3, 2)
+        elif self.ndim == 2: perm_dims = (0, 1, 4, 2, 3)
+        elif self.ndim == 3: perm_dims = (0, 1, 5, 2, 3, 4)
+        else: raise ValueError("ndim must be 1, 2, or 3")
+        bases = bases.permute(*perm_dims).contiguous().view(batch_size, i_g * self.grid_k, *x.shape[2:])
+
+
+        out_sp_shape_list = []
+
+        _s, _p, _d, _k = self.stride, self.padding, self.dilation, ks_tuple
+        for d_idx in range(self.ndim):
+            L_in = x.shape[2+d_idx]
+            P_d = _p[d_idx] if isinstance(_p, (list,tuple)) else _p
+            DIL_d = _d[d_idx] if isinstance(_d, (list,tuple)) else _d
+            K_d = _k[d_idx] # ks_tuple is already a tuple
+            S_d = _s[d_idx] if isinstance(_s, (list,tuple)) else _s
+            L_out = (L_in + 2 * P_d - DIL_d * (K_d - 1) - 1) // S_d + 1
+            out_sp_shape_list.append(L_out)
+        out_sp_shape = tuple(out_sp_shape_list)
+        # ---
+
+        y_acc = torch.zeros( batch_size, o_g, *out_sp_shape, device=x.device, dtype=x.dtype )
+        
+        if self.ndim == 1: conv = F.conv1d
+        elif self.ndim == 2: conv = F.conv2d
+        elif self.ndim == 3: conv = F.conv3d
+        else: raise ValueError(f"Unsupported ndim: {self.ndim}")
+
+        for o_start in range(0, o_g, self.o_batch_size):
+            o_end = min(o_start + self.o_batch_size, o_g)
+
+            b_w_b = base_w_full[o_start:o_end, ...] 
+            s_w_b = spline_w_full[o_start:o_end, ...] 
+
+            b_out = conv(x_act, b_w_b, stride=self.stride, padding=self.padding, dilation=self.dilation, groups=1)
+            s_out = conv(bases, s_w_b, stride=self.stride, padding=self.padding, dilation=self.dilation, groups=1)
+            
+            y_acc[:, o_start:o_end, ...] = b_out + s_out
+        
+        x = self.prelus[group_index](self.layer_norm[group_index](y_acc)) 
+
+        if self.dropout is not None:
+            x = self.dropout(x)
+
+        return x
+
+    def forward(self, x, layer_weight): 
+        split_x = torch.split(x, self.inputdim // self.groups, dim=1) 
+        output = []
+        for group_ind, _x in enumerate(split_x):
+            y = self.forward_kan(_x, group_ind, layer_weight)
+            output.append(y.clone())
+        y = torch.cat(output, dim=1)
+        return y
+
+    def calculate_spline_basis_maps(self, x_group: torch.Tensor) -> torch.Tensor:
+
+
+        N_batch = x_group.shape[0]
+        I_group = self.input_dim_per_group # x_group.shape[1]
+        input_spatial_dims = x_group.shape[2:]
+
+        grid_view_dims = [1] * (self.ndim + 1) + [-1] # e.g., [1,1,1,-1] for ndim=2
+        # target_expand_shape: (I_group, *input_spatial_dims, G_total_points)
+        target_expand_shape = list(x_group.shape[1:]) #获取 (I_group, *input_spatial_dims)
+        target_expand_shape.append(self.grid.shape[0])
+
+
+        grid_ready_for_broadcast = self.grid.view(*grid_view_dims).expand(target_expand_shape).contiguous().to(x_group.device)
+        grid_ready_for_broadcast = grid_ready_for_broadcast.unsqueeze(0) # (1, I_group, *spatial_dims, G_total_points)
+
+
+        x_uns = x_group.unsqueeze(-1) # (N, I_group, *input_spatial_dims, 1)
+        
+        bases = ((x_uns >= grid_ready_for_broadcast[..., :-1]) & (x_uns < grid_ready_for_broadcast[..., 1:])).to(x_group.dtype)
+
+        epsilon = 1e-8 
+        for k_order in range(1, self.spline_order + 1):
+            g_left = grid_ready_for_broadcast[..., :-(k_order + 1)]
+            g_right = grid_ready_for_broadcast[..., k_order:-1]
+            
+            delta_prev = g_right - g_left
+            delta_prev = torch.where(delta_prev == 0, torch.ones_like(delta_prev) * epsilon, delta_prev) # Avoid division by zero
+
+            g_k_plus_1 = grid_ready_for_broadcast[..., k_order + 1:]
+            g_1_minus_k = grid_ready_for_broadcast[..., 1:(-k_order)]
+            delta_next = g_k_plus_1 - g_1_minus_k
+            delta_next = torch.where(delta_next == 0, torch.ones_like(delta_next) * epsilon, delta_next) # Avoid division by zero
+
+            term1_num = x_uns - g_left
+            term1 = (term1_num / delta_prev) * bases[..., :-1]
+            
+            term2_num = g_k_plus_1 - x_uns
+            term2 = (term2_num / delta_next) * bases[..., 1:]
+            bases = term1 + term2
+        
+        bases = bases.contiguous() # Shape: (N, I_group, *input_spatial_dims, self.grid_k)
+        
+        permute_dims = [0, 1, self.ndim + 2] + list(range(2, self.ndim + 2))
+        bases_permuted = bases.permute(*permute_dims).contiguous()
+        
+        final_shape_channels = I_group * self.grid_k
+        bases_reshaped = bases_permuted.view(N_batch, final_shape_channels, *input_spatial_dims)
+        
+        return bases_reshaped
 
 class MetaKANConv3DLayer(MetaKANConvNDLayer):
     def __init__(self, input_dim, output_dim, kernel_size, spline_order=3, groups=1, padding=0, stride=1, dilation=1,

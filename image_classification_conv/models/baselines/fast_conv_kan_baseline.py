@@ -4,6 +4,7 @@ import torch.nn as nn
 from kan_convs import FastKANConv2DLayer
 
 from utils import L1
+from typing import List
 
 class SplineLinear(nn.Linear):
     def __init__(self, in_features: int, out_features: int, init_scale: float = 0.1, **kw) -> None:

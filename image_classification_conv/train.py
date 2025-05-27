@@ -328,11 +328,6 @@ def get_model(args, input_channels, num_classes):
                                  dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                                  degree_out=1)
 
-
-    elif args.model == 'HyperKAN':
-        kan_model = SimpleHyperConvKAN([8 * 4, 16 * 4, 32 * 4, 64 * 4], num_classes=num_classes, input_channels=input_channels,
-                             grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                             degree_out=1, embedding_dim=1, hidden_dim=64, norm_layer= nn.BatchNorm2d)
     return kan_model
 
 
