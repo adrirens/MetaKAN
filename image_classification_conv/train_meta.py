@@ -29,7 +29,8 @@ from models import  SimpleFastConvKAN, SimpleConvKAN,\
 
 from models.metafastconvkan import SimpleMetaFastConvKAN, EightFastMetaConvKAN, EightFastMetaConvKAN_L, EightFastMetaConvKAN_L3
 from models.metaconvkan import SimpleMetaConvKAN, EightSimpleMetaConvKAN, EightSimpleMetaConvKAN_L,EightSimpleMetaConvKAN_LC, EightSimpleMetaConvKAN_L3,\
-EightSimpleMetaConvKAN_DE, EightSimpleMetaConvKAN_DEL, EightSimpleMetaConvKAN_L3_DE, EightSimpleMetaConvKAN_L4, EightSimpleMetaConvKAN_L5, EightSimpleMetaConvKAN_L6
+EightSimpleMetaConvKAN_DE, EightSimpleMetaConvKAN_DEL, EightSimpleMetaConvKAN_L3_DE, EightSimpleMetaConvKAN_L4, EightSimpleMetaConvKAN_L5, EightSimpleMetaConvKAN_L6,\
+EightSimpleMetaConvKAN_M
 from models.metaconvkaln import SimpleMetaConvKALN, EightSimpleMetaConvKALN
 
 from models.metaconvkagn import SimpleMetaConvKAGN, EightSimpleMetaConvKAGN, SimpleMetaConvKAGN_L4, SimpleMetaConvKAGN_L2,\
@@ -347,6 +348,12 @@ def get_model(args, input_channels, num_classes):
                                   num_classes=num_classes, input_channels=input_channels,
                                   grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                                   degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, norm_layer= norm_layer)
+        
+    elif args.model == 'MetaKAN8_M':
+        kan_model = EightSimpleMetaConvKAN_M([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
+                                  num_classes=num_classes, input_channels=input_channels, n_metanets = args.n_metanets,
+                                  grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
+                                  degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, norm_layer= norm_layer)        
         
     elif args.model == 'MetaKAN8_DE':
         kan_model = EightSimpleMetaConvKAN_DE([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
