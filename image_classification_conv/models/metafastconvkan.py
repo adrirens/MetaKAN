@@ -6,6 +6,8 @@ import abc
 import torch.optim as optim
 import torchvision
 import torch.nn.functional as F
+import numpy as np
+from sklearn.cluster import KMeans
 
 
 class SplineLinear(nn.Linear):
@@ -446,6 +448,102 @@ class EightFastMetaConvKAN(nn.Module):
         x = torch.flatten(x, 1)
         x = self.output(x)
         return x
+    
+
+class EightFastMetaConvKAN_M(nn.Module):
+    def __init__(
+            self,
+            layer_sizes,
+            num_classes: int = 10,
+            n_metanets: int = 1,
+            input_channels: int = 1,
+            grid_size: int = 8,
+            degree_out: int = 2,
+            groups: int = 1,
+            dropout: float = 0.0,
+            dropout_linear: float = 0.0,
+            l1_penalty: float = 0.0,
+            affine: bool = True,
+            norm_layer: nn.Module = nn.BatchNorm2d,
+            embedding_dim: int = 1,
+            hidden_dim: int = 128,
+            dropout_hyper: float = 0.0
+    ):
+        super(EightFastMetaConvKAN_M, self).__init__()
+
+        feats  = np.array(layer_sizes).reshape(-1, 1)
+        kmeans = KMeans(n_clusters=n_metanets, random_state=42).fit(feats)
+        labels = kmeans.labels_        
+
+        centers = np.argsort(kmeans.cluster_centers_.squeeze())
+        reorder = {old:new for new, old in enumerate(centers)}
+        self.layer2hyper = [reorder[int(lab)] for lab in labels]  # list 长度 = L        
+        print(self.layer2hyper)
+
+
+        self.layer_sizes = [input_channels]+layer_sizes
+        self.grid_k = grid_size       
+        self.hyper_net = nn.ModuleList([
+            HyperNetwork(input_dim=embedding_dim,
+                         output_dim=self.grid_k + 1,
+                         hidden_dim=hidden_dim,
+                         dropout_hyper=dropout_hyper)
+            for _ in range(n_metanets)
+        ])
+        # 初始化每一层的嵌入向量列表 nn.ParameterList
+        self.embeddings = nn.ParameterList([nn.Parameter(torch.randn(input_channels * layer_sizes[0]*3*3, embedding_dim))])
+        for i in range(len(layer_sizes) - 1):
+            self.embeddings.append(nn.Parameter(torch.randn(layer_sizes[i] * layer_sizes[i + 1]*3*3, embedding_dim)))
+        self.layers = nn.Sequential(
+            FastMetaKANConv2DLayer(input_channels, layer_sizes[0], grid_size=grid_size, kernel_size=3, groups=1, padding=1,
+                               stride=1, dilation=1, affine=affine, norm_layer=norm_layer),
+            FastMetaKANConv2DLayer(layer_sizes[0], layer_sizes[1], grid_size=grid_size, kernel_size=3, groups=groups,
+                                  padding=1, stride=2, dilation=1, dropout=dropout, affine=affine,
+                                  norm_layer=norm_layer),
+            FastMetaKANConv2DLayer(layer_sizes[1], layer_sizes[2], grid_size=grid_size, kernel_size=3, groups=groups,
+                                  padding=1, stride=2, dilation=1, dropout=dropout, affine=affine,
+                                  norm_layer=norm_layer),
+            FastMetaKANConv2DLayer(layer_sizes[2], layer_sizes[3], grid_size=grid_size, kernel_size=3, groups=groups,
+                                  padding=1, stride=1, dilation=1, dropout=dropout, affine=affine,
+                                  norm_layer=norm_layer),
+            FastMetaKANConv2DLayer(layer_sizes[3], layer_sizes[4], grid_size=grid_size, kernel_size=3, groups=groups,
+                                  padding=1, stride=1, dilation=1, dropout=dropout, affine=affine,
+                                  norm_layer=norm_layer),
+            FastMetaKANConv2DLayer(layer_sizes[4], layer_sizes[5], grid_size=grid_size, kernel_size=3, groups=groups,
+                                  padding=1, stride=2, dilation=1, dropout=dropout, affine=affine,
+                                  norm_layer=norm_layer),
+            FastMetaKANConv2DLayer(layer_sizes[5], layer_sizes[6], grid_size=grid_size, kernel_size=3, groups=groups,
+                                  padding=1, stride=1, dilation=1, dropout=dropout, affine=affine,
+                                  norm_layer=norm_layer), 
+            FastMetaKANConv2DLayer(layer_sizes[6], layer_sizes[7], grid_size=grid_size, kernel_size=3, groups=groups,
+                                  padding=1, stride=1, dilation=1, dropout=dropout, affine=affine,
+                                  norm_layer=norm_layer)
+        )
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        if degree_out < 2:
+            self.output = nn.Sequential(nn.Dropout(p=dropout_linear), nn.Linear(layer_sizes[7], num_classes))
+        else:
+            self.output = FastKAN([layer_sizes[7], num_classes], dropout=dropout_linear,
+                                  first_dropout=True, grid_size=grid_size)
+            
+        self._initialize_embeddings()
+
+
+    def _initialize_embeddings(self):
+        """ 对嵌入向量进行 Xavier 初始化 """
+        for embedding in self.embeddings:
+            nn.init.xavier_uniform_(embedding)
+
+
+    def forward(self, x):
+        for i, (layer, emb) in enumerate(zip(self.layers, self.embeddings)):
+            hnet_id   = self.layer2hyper[i]
+            weight    = self.hyper_net[hnet_id](emb).reshape(self.layer_sizes[i+1], self.layer_sizes[i]*(self.grid_k+1), 3, 3)
+            x = layer(x, weight)
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.output(x)
+        return x    
 
 class EightFastMetaConvKAN_DE(nn.Module):
     def __init__(

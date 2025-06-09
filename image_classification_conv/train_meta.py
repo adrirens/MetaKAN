@@ -27,15 +27,14 @@ from datetime import datetime
 from models import  SimpleFastConvKAN, SimpleConvKAN,\
     EightSimpleFastConvKAN, EightSimpleConvKAN
 
-from models.metafastconvkan import SimpleMetaFastConvKAN, EightFastMetaConvKAN, EightFastMetaConvKAN_L, EightFastMetaConvKAN_L3
-from models.metaconvkan import SimpleMetaConvKAN, EightSimpleMetaConvKAN, EightSimpleMetaConvKAN_L,EightSimpleMetaConvKAN_LC, EightSimpleMetaConvKAN_L3,\
-EightSimpleMetaConvKAN_DE, EightSimpleMetaConvKAN_DEL, EightSimpleMetaConvKAN_L3_DE, EightSimpleMetaConvKAN_L4, EightSimpleMetaConvKAN_L5, EightSimpleMetaConvKAN_L6,\
+from models.metafastconvkan import SimpleMetaFastConvKAN, EightFastMetaConvKAN, EightFastMetaConvKAN_L, EightFastMetaConvKAN_L3, EightFastMetaConvKAN_M
+from models.metaconvkan import SimpleMetaConvKAN, EightSimpleMetaConvKAN, EightSimpleMetaConvKAN_L,EightSimpleMetaConvKAN_L3, EightSimpleMetaConvKAN_L4, EightSimpleMetaConvKAN_L5, EightSimpleMetaConvKAN_L6,\
 EightSimpleMetaConvKAN_M
 from models.metaconvkaln import SimpleMetaConvKALN, EightSimpleMetaConvKALN
 
 from models.metaconvkagn import SimpleMetaConvKAGN, EightSimpleMetaConvKAGN, SimpleMetaConvKAGN_L4, SimpleMetaConvKAGN_L2,\
       EightSimpleMetaConvKAGN_L,EightSimpleMetaConvKAGN_L3, \
-    EightSimpleMetaConvKAGN_L4, EightSimpleMetaConvKAGN_L2, EightSimpleMetaConvKAGN_DE, EightSimpleMetaConvKAGN_L3_DE
+    EightSimpleMetaConvKAGN_L4, EightSimpleMetaConvKAGN_L2 
 from models.metaconvkacn import SimpleMetaConvKACN, EightSimpleMetaConvKACN
 
 warnings.simplefilter(action='ignore', category=UserWarning)
@@ -354,25 +353,7 @@ def get_model(args, input_channels, num_classes):
                                   num_classes=num_classes, input_channels=input_channels, n_metanets = args.n_metanets,
                                   grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                                   degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, norm_layer= norm_layer)        
-        
-    elif args.model == 'MetaKAN8_DE':
-        kan_model = EightSimpleMetaConvKAN_DE([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                                  num_classes=num_classes, input_channels=input_channels,
-                                  grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                                  degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, norm_layer= norm_layer)
-
-    elif args.model == 'MetaKAN8_DEL':
-        kan_model = EightSimpleMetaConvKAN_DEL([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                                  num_classes=num_classes, input_channels=input_channels,
-                                  grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                                  degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, norm_layer= norm_layer, layer_emb_dim=args.layer_emb_dim)               
-
-
-    elif args.model == 'MetaKAN8_L3_DE':
-        kan_model = EightSimpleMetaConvKAN_L3_DE([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                                  num_classes=num_classes, input_channels=input_channels,
-                                  grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                                  degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, norm_layer= norm_layer, layer_emb_dim=args.layer_emb_dim)               
+       
 
 
     elif args.model == 'MetaFastKAN8':
@@ -401,6 +382,13 @@ def get_model(args, input_channels, num_classes):
                                   grid_size=8, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                                   degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper = args.dropout_hyper, norm_layer= nn.InstanceNorm2d)
 
+    elif args.model == 'MetaFastKAN8_M':
+        kan_model = EightFastMetaConvKAN_M([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
+                                  num_classes=num_classes, input_channels=input_channels,n_metanets = args.n_metanets,
+                                  grid_size=8, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
+                                  degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper = args.dropout_hyper, norm_layer= norm_layer)
+
+
     elif args.model == 'MetaFastKAN8_L3':
         kan_model = EightFastMetaConvKAN_L3([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
                                   num_classes=num_classes, input_channels=input_channels,
@@ -414,11 +402,6 @@ def get_model(args, input_channels, num_classes):
                                   grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                                   degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper=args.dropout_hyper, norm_layer= nn.InstanceNorm2d)
 
-    elif args.model == 'MetaKAN8_LC':
-        kan_model = EightSimpleMetaConvKAN_LC([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                                  num_classes=num_classes, input_channels=input_channels,
-                                  grid_size=5, groups=1, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                                  degree_out=1, embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper=args.dropout_hyper, norm_layer= nn.InstanceNorm2d)
     elif args.model == 'MetaKAN8_L3':
         kan_model = EightSimpleMetaConvKAN_L3([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
                                   num_classes=num_classes, input_channels=input_channels,
@@ -458,24 +441,12 @@ def get_model(args, input_channels, num_classes):
                         degree_out=1,embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper=args.dropout_hyper, norm_layer= nn.InstanceNorm2d)                        
 
 
-    elif args.model == 'MetaKAGN8_DE':
-        kan_model = EightSimpleMetaConvKAGN_DE([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                        num_classes=num_classes, input_channels=input_channels,
-                        degree=3, groups=args.groups, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                        degree_out=1,embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper=args.dropout_hyper, norm_layer= nn.InstanceNorm2d, layer_emb_dim=args.layer_emb_dim)                        
-
-
     elif args.model == 'MetaKAGN8_L3':
         kan_model = EightSimpleMetaConvKAGN_L3([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
                         num_classes=num_classes, input_channels=input_channels,
                         degree=3, groups=args.groups, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
                         degree_out=1,embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper=args.dropout_hyper, norm_layer= norm_layer)   
 
-    elif args.model == 'MetaKAGN8_L3_DE':
-        kan_model = EightSimpleMetaConvKAGN_L3_DE([8 * 2, 16 * 2, 32 * 2, 64 * 2, 128 * 2, 128 * 2, 128 * 4, 128 * 4],
-                        num_classes=num_classes, input_channels=input_channels,
-                        degree=3, groups=args.groups, dropout=0.25, dropout_linear=0.5, l1_penalty=0.00000,
-                        degree_out=1,embedding_dim=args.embedding_dim, hidden_dim=args.hidden_dim, dropout_hyper=args.dropout_hyper, norm_layer= norm_layer, layer_emb_dim=args.layer_emb_dim)   
 
 
 
@@ -541,7 +512,9 @@ def main():
     
     ################# Parameters for hypernetwork #################
     parser.add_argument('--embedding_dim', type=int, default=1, 
-                        help='dimension of embedding vector')  
+                        help='dimension of embedding vector') 
+    parser.add_argument('--n_metanets', type=int, default=1,
+                        help='number of metanets for MetaKAN8_M and MetaFastKAN8_M')
     parser.add_argument('--hidden_dim',type=int, default= 64,
                         help='hidden dimension of hypernet')  
     parser.add_argument('--lr_h',type=float, default= 1e-3,
@@ -573,7 +546,8 @@ def main():
 
     args.exp_id = f"./logs/{args.dataset}/{args.model}/"    
     args.exp_id = args.exp_id + f"{args.embedding_dim}__{args.hidden_dim}__{args.batch_size}__{args.epochs}__{args.seed}__{args.gamma}__{args.dropout_hyper}__{args.scheduler}__{args.groups}__{args.norm_layer}"
-
+    if args.model in ['MetaKAN8_M','MetaFastKAN8_M']:
+        args.exp_id = args.exp_id + f"__{args.n_metanets}"
     if args.optim_set == 'double':
         args.exp_id = args.exp_id + f"__{args.optim_set}__{args.lr_h}__{args.lr_e}__{args.wd_e}__{args.wd}__{args.emb_sched}__{args.hypernet_sched}"
     elif args.optim_set == 'single':

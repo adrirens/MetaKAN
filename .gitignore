@@ -8,3 +8,5 @@ image_classification_conv/data/MNIST/raw/t10k-labels-idx1-ubyte
 image_classification_conv/data/MNIST/raw/t10k-images-idx3-ubyte
 image_classification_conv/data/MNIST/raw/train-images-idx3-ubyte
 /image_classification_conv/logs
+*.pyc
+*.pyc
