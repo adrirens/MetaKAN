@@ -115,6 +115,8 @@ class PINN:
         self.optimizer_hyper = None
         self.scheduler_emb = None
         self.scheduler_hyper = None
+        self.lr_e = args.lr_e
+        self.lr_h = args.lr_h
 
         if args.model == 'MLP':
             self.u_net = MLP(layers).to(device)
@@ -129,10 +131,10 @@ class PINN:
             params_embeddings = list(self.u_net.embeddings.parameters())
             params_hypernet = list(self.u_net.metanet.parameters())
 
-            self.optimizer_emb = torch.optim.Adam(params_embeddings, lr=self.adam_lr)
+            self.optimizer_emb = torch.optim.Adam(params_embeddings, lr=self.lr_e)
             print(f"MetaKAN: Initialized optimizer for embeddings with {sum(p.numel() for p in params_embeddings)} parameters.")
 
-            self.optimizer_hyper = torch.optim.Adam(params_hypernet, lr=self.adam_lr)
+            self.optimizer_hyper = torch.optim.Adam(params_hypernet, lr=self.lr_h)
             print(f"MetaKAN: Initialized optimizer for hypernet with {sum(p.numel() for p in params_hypernet)} parameters.")
 
 
