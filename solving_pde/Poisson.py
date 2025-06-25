@@ -257,49 +257,7 @@ class PINN:
 
 
 
-def visualize_pointwise_error(model, x_i, args, func_u, save_path="visualization.png"):
-    """
-    Visualize the point-wise errors of the model for a specific slice.
-    Args:
-        model: Trained model to evaluate.
-        x_i: Interior points used for evaluation.
-        args: Parsed arguments containing dimension and other details.
-        save_path: File path to save the visualization.
-    """
-    model.u_net.eval()  # Set model to evaluation mode
 
-    # Generate a grid for 2D slice visualization
-    x1 = np.linspace(-1, 1, 100)  # 100 points along x1
-    x2 = np.linspace(-1, 1, 100)  # 100 points along x2
-    X1, X2 = np.meshgrid(x1, x2)
-    X = np.stack([X1.ravel(), X2.ravel()], axis=1)  # Flatten into pairs
-
-    # Extend grid to higher dimensions (x3, x4, ..., xd set to 0)
-    d = args.dim
-    if d > 2:
-        X = np.hstack([X, np.zeros((X.shape[0], d - 2))])  # Add zeros for higher dimensions
-
-    # Convert to torch tensor
-    X_tensor = torch.tensor(X, dtype=torch.float32)
-    model.u_net = model.u_net.cpu()
-
-    # Compute model predictions and true solution
-    with torch.no_grad():
-        pred = model.u_net(X_tensor).cpu().numpy().flatten()  # Predicted values
-        true = func_u(X_tensor.cpu().numpy()).flatten()  # True solution
-
-    # Compute point-wise errors
-    error = np.abs(pred - true).reshape(X1.shape)
-
-    # Plot the error as a heatmap
-    plt.figure(figsize=(8, 6))
-    plt.contourf(X1, X2, error, levels=100, cmap='jet')  # Filled contour plot
-    plt.colorbar(label="Point-wise error")
-    plt.xlabel("$x_1$")
-    plt.ylabel("$x_2$")
-    plt.title(f"Point-wise Error for d={d}, Slice $x_3=x_4=...=x_d=0$")
-    plt.savefig(save_path, dpi=300)  # Save the figure
-    plt.show()  # Display the plot
 
 
 model = PINN()
@@ -319,6 +277,3 @@ if args.save_loss:
         index=False
     )
 
-save_path = f'{args.model}_{args.dim}_Possion_visualization.png'
-# 调用绘图函数
-visualize_pointwise_error(model, x, args, func_u, save_path=save_path)
