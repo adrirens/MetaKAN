@@ -5,7 +5,7 @@ import argparse
 from tqdm import tqdm
 import pandas as pd
 from models.kan import KAN
-from models.metakan import MetaKAN
+from models import kan, metakan
 import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser(description='PINN Training')
@@ -15,6 +15,8 @@ parser.add_argument('--dataset', type=str, default="Poisson")
 parser.add_argument('--device', type=str, default="cuda")
 parser.add_argument('--epochs', type=int, default=10000) # Adam epochs
 parser.add_argument('--lr', type=float, default=1e-3) # Adam lr
+parser.add_argument('--lr_h', type=float, default=1e-3)
+parser.add_argument('--lr_e', type=float, default=1e-2)
 parser.add_argument('--PINN_h', type=int, default=128) # width of PINN
 parser.add_argument('--PINN_L', type=int, default=4) # depth of PINN
 parser.add_argument('--save_loss', type=bool, default=True) # save the optimization trajectory?
@@ -85,20 +87,24 @@ class KAN(nn.Module):
     def forward(self, x):
         return ((1 - torch.sum(x**2, 1, keepdims=True)) * self.kan(x))
     
-
-class HyperKAN(nn.Module):
+class MetaKAN(nn.Module):
     def __init__(self, layers:list, grid, k, hidden_dim, embedding_dim, device):  
-        super(HyperKAN, self).__init__()
-        self.hyperkan = MetaKAN(width = layers, grid = grid, k = k, hidden_dim = hidden_dim, embedding_dim = embedding_dim, device = device)
+        super(MetaKAN, self).__init__()
+        self.hyperkan = metakan.MetaKAN(layers_hidden = layers, grid_size = grid, spline_order = k, hidden_dim = hidden_dim, embedding_dim = embedding_dim)
+        self.embeddings = self.hyperkan.embeddings
+        self.metanet = self.hyperkan.hypernet
 
     def forward(self, x):
         return ((1 - torch.sum(x**2, 1, keepdims=True)) * self.hyperkan(x)) 
+
 
 
 class PINN:
     def __init__(self):
         self.epoch = args.epochs
         self.adam_lr = args.lr
+        self.lr_e = args.lr_e
+        self.lr_h = args.lr_h
         self.dim, self.batch_size = args.dim, args.batch_size
         self.x = torch.tensor(x, dtype=torch.float32, requires_grad=False).to(device)
         self.u = torch.tensor(u, dtype=torch.float32, requires_grad=False).to(device).reshape(-1)
@@ -108,8 +114,20 @@ class PINN:
             self.u_net = MLP(layers).to(device)
         elif args.model == 'KAN':
             self.u_net = KAN(layers, grid = args.grid, k=args.k).to(device)
-        elif args.model == 'HyperKAN':
-            self.u_net = HyperKAN(layers, grid = args.grid, k=args.k, hidden_dim = args.hidden_dim, embedding_dim = args.embedding_dim, device = device).to(device)
+        elif args.model == 'MetaKAN':
+            self.u_net = MetaKAN(layers, grid=args.grid, k=args.k, 
+                                 hidden_dim=args.hidden_dim, 
+                                 embedding_dim=args.embedding_dim, 
+                                 device=device).to(device)
+            
+            params_embeddings = list(self.u_net.embeddings.parameters())
+            params_hypernet = list(self.u_net.metanet.parameters())
+
+            self.optimizer_emb = torch.optim.Adam(params_embeddings, lr=self.lr_e)
+            print(f"MetaKAN: Initialized optimizer for embeddings with {sum(p.numel() for p in params_embeddings)} parameters.")
+
+            self.optimizer_hyper = torch.optim.Adam(params_hypernet, lr=self.lr_h)
+            print(f"MetaKAN: Initialized optimizer for hypernet with {sum(p.numel() for p in params_hypernet)} parameters.")
         # self.u_net = MLP(layers).to(device)
         print(self.u_net)
         self.net_params_pinn = list(self.u_net.parameters())
