@@ -1,19 +1,20 @@
 # MetaKAN
-Official Code Implementation of "Improving Memory Efficiency for Training KANs via Meta Learning"
+Official Code Implementation of "Improving Memory Efficiency for Training KANs via Meta Learning"  
+📄 [Paper Link (arXiv:2506.07549)](https://arxiv.org/pdf/2506.07549)
 
 
 This paper proposes a new method called **MetaKAN**, which uses meta-learning strategies to significantly reduce the memory consumption of Kolmogorov-Arnold Networks (KANs) during training while maintaining their powerful performance.
 
 ## Table of Contents
 
-- [Project Overview]
-- [Project File Structure]
-- [Quick Start: Running Experiments]
-  - [Function Fitting]
-  - [Image Classification (Fully Connected)]
-  - [Image Classification (Convolutional)]
-  - [Solving Partial Differential Equations (PDEs)]
-- [How to Cite]
+- [Project Overview](#project-overview)
+- [Project File Structure](#project-file-structure)
+- [Quick Start: Running Experiments](#quick-start-running-experiments)
+  - [Function Fitting](#function-fitting)
+  - [Image Classification (Fully Connected)](#image-classification-fully-connected)
+  - [Image Classification (Convolutional)](#image-classification-convolutional)
+  - [Solving Partial Differential Equations (PDEs)](#solving-partial-differential-equations-pdes)
+- [How to Cite](#how-to-cite)
 
 
 
@@ -46,9 +47,34 @@ Run the following commands to perform one-dimensional or two-dimensional functio
 
 - **Train a MetaKAN model for function fitting:**
 
-Run function_fitting.ipynb and interpretation.ipynb
+```bash
+  cd function_fitting
 
+  python train_hyper.py \
+      --model HyperKAN \
+      --optimizer lbfgs \
+      --lr 1 \
+      --dataset I.6.20b \
+      --layers_width 5 5 5 \
+      --loss mse \
+      --embedding_dim 1 \
+      --hidden_dim 16 \
 
+```
+- **Train a KAN model for function fitting:**
+
+```bash
+  cd function_fitting
+
+  python train.py \
+      --model KAN \
+      --optimizer lbfgs \
+      --lr 1 \
+      --dataset I.6.20b \
+      --layers_width 5 5 5 \
+      --loss mse \
+
+```
 
 ### Image Classification (Fully Connected)
 

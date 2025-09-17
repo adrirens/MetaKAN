@@ -10,3 +10,5 @@ image_classification_conv/data/MNIST/raw/train-images-idx3-ubyte
 /image_classification_conv/logs
 *.pyc
 *.pyc
+/function_fitting/figures
+*.png
