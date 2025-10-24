@@ -84,7 +84,7 @@ class MetaKAN(torch.nn.Module):
         self.embeddings = nn.ParameterList()
 
         self.metanet = nn.ModuleList([
-            MetaNet(args.input_dim, args.hidden_dim, self.d_b) for _ in range(len(layers_hidden) - 1)
+            MetaNet(args.input_size, args.hidden_dim, self.d_b) for _ in range(len(layers_hidden) - 1)
         ])
 
         self.layers = nn.ModuleList()
